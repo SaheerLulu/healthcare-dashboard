@@ -10,6 +10,7 @@ import { SupplierPerformance } from './pages/SupplierPerformance';
 import { CustomerAnalytics } from './pages/CustomerAnalytics';
 import { ReturnsAnalysis } from './pages/ReturnsAnalysis';
 import { DataTable } from './pages/DataTable';
+import { DrillThrough } from './pages/DrillThrough';
 
 export const router = createBrowserRouter([
   { path: '/', element: <Dashboard /> },
@@ -23,4 +24,5 @@ export const router = createBrowserRouter([
   { path: '/customer-analytics', element: <CustomerAnalytics /> },
   { path: '/returns-analysis', element: <ReturnsAnalysis /> },
   { path: '/data-table', element: <DataTable /> },
+  { path: '/drill-through', element: <DrillThrough /> },
 ]);

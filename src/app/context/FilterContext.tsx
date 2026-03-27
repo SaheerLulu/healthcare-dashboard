@@ -25,6 +25,10 @@ interface FilterContextType {
   chartFilter: { field: string | null; value: string | null };
   setChartFilter: (filter: { field: string | null; value: string | null }) => void;
 
+  // Drill-through data
+  drillThroughData: { title: string; columns: { key: string; label: string }[]; rows: Record<string, unknown>[] } | null;
+  setDrillThroughData: (data: { title: string; columns: { key: string; label: string }[]; rows: Record<string, unknown>[] } | null) => void;
+
   clearAllFilters: () => void;
   hasActiveFilters: boolean;
 }
@@ -43,6 +47,7 @@ export function FilterProvider({ children }: { children: ReactNode }) {
     field: null,
     value: null,
   });
+  const [drillThroughData, setDrillThroughData] = useState<FilterContextType['drillThroughData']>(null);
 
   const clearAllFilters = () => {
     setDateRange(DEFAULT_DATE_RANGE);
@@ -51,6 +56,7 @@ export function FilterProvider({ children }: { children: ReactNode }) {
     setSelectedCompanies([]);
     setSearchQuery('');
     setChartFilter({ field: null, value: null });
+    setDrillThroughData(null);
   };
 
   const hasActiveFilters = useMemo(() =>
@@ -79,6 +85,8 @@ export function FilterProvider({ children }: { children: ReactNode }) {
         setSearchQuery,
         chartFilter,
         setChartFilter,
+        drillThroughData,
+        setDrillThroughData,
         clearAllFilters,
         hasActiveFilters,
       }}
