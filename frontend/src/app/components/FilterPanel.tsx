@@ -1,9 +1,24 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useFilters } from '../contexts/FilterContext';
+import { useCrossFilter } from '../contexts/CrossFilterContext';
+import { useApiData } from '../hooks/useApiData';
+
+interface FilterOptions {
+  locations: Array<{ id: string; name: string }>;
+  categories: string[];
+  channels: string[];
+  payment_methods: string[];
+}
 
 export const FilterPanel = () => {
   const { filters, updateFilters, resetFilters } = useFilters();
+  const { clearAllCrossFilters } = useCrossFilter();
+  const { data: options } = useApiData<FilterOptions>(
+    '/executive/filter-options/',
+    { locations: [], categories: [], channels: [], payment_methods: [] },
+    { noFilters: true }
+  );
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     time: true,
     location: false,
@@ -16,10 +31,6 @@ export const FilterPanel = () => {
   };
 
   const quickPresets = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'This Month', 'Last Month', 'This Quarter', 'This FY'];
-  const channels = ['POS (Retail)', 'B2B (Wholesale)'];
-  const paymentMethods = ['Cash', 'UPI', 'Card', 'Credit', 'Cheque'];
-  const locations = ['Main Store - Delhi', 'Branch - Mumbai', 'Branch - Bangalore', 'Warehouse - Noida', 'Branch - Chennai'];
-  const categories = ['Medicines', 'Surgical', 'OTC', 'Cosmetics', 'Baby Care', 'Ayurvedic', 'Equipment'];
 
   return (
     <div className="px-3 pb-4">
@@ -99,6 +110,7 @@ export const FilterPanel = () => {
       </div>
 
       {/* Location Section */}
+      {options.locations.length > 0 && (
       <div className="mb-3">
         <button
           onClick={() => toggleSection('location')}
@@ -121,27 +133,29 @@ export const FilterPanel = () => {
 
         {expandedSections.location && (
           <div className="mt-2 px-2 space-y-1">
-            {locations.map(loc => (
-              <label key={loc} className="flex items-center gap-2 py-1 cursor-pointer hover:bg-gray-50 rounded px-1">
+            {options.locations.map(loc => (
+              <label key={loc.id} className="flex items-center gap-2 py-1 cursor-pointer hover:bg-gray-50 rounded px-1">
                 <input
                   type="checkbox"
-                  checked={filters.locations.includes(loc)}
+                  checked={filters.locations.includes(loc.id)}
                   onChange={(e) => {
                     const newLocs = e.target.checked
-                      ? [...filters.locations, loc]
-                      : filters.locations.filter(l => l !== loc);
+                      ? [...filters.locations, loc.id]
+                      : filters.locations.filter(l => l !== loc.id);
                     updateFilters({ locations: newLocs });
                   }}
                   className="w-3 h-3 text-teal-600 rounded focus:ring-teal-500"
                 />
-                <span className="text-xs text-gray-700">{loc}</span>
+                <span className="text-xs text-gray-700">{loc.name}</span>
               </label>
             ))}
           </div>
         )}
       </div>
+      )}
 
       {/* Product Category Section */}
+      {options.categories.length > 0 && (
       <div className="mb-3">
         <button
           onClick={() => toggleSection('product')}
@@ -164,7 +178,7 @@ export const FilterPanel = () => {
 
         {expandedSections.product && (
           <div className="mt-2 px-2 space-y-1">
-            {categories.map(cat => (
+            {options.categories.map(cat => (
               <label key={cat} className="flex items-center gap-2 py-1 cursor-pointer hover:bg-gray-50 rounded px-1">
                 <input
                   type="checkbox"
@@ -183,8 +197,10 @@ export const FilterPanel = () => {
           </div>
         )}
       </div>
+      )}
 
       {/* Transaction Dimensions Section */}
+      {(options.channels.length > 0 || options.payment_methods.length > 0) && (
       <div className="mb-3">
         <button
           onClick={() => toggleSection('transaction')}
@@ -202,10 +218,11 @@ export const FilterPanel = () => {
 
         {expandedSections.transaction && (
           <div className="mt-2 space-y-3 px-2">
+            {options.channels.length > 0 && (
             <div>
               <label className="text-xs font-medium text-gray-600 mb-1 block">Sales Channel</label>
               <div className="space-y-1">
-                {channels.map(channel => (
+                {options.channels.map(channel => (
                   <label key={channel} className="flex items-center gap-2 py-1 cursor-pointer hover:bg-gray-50 rounded px-1">
                     <input
                       type="checkbox"
@@ -223,11 +240,13 @@ export const FilterPanel = () => {
                 ))}
               </div>
             </div>
+            )}
 
+            {options.payment_methods.length > 0 && (
             <div>
               <label className="text-xs font-medium text-gray-600 mb-1 block">Payment Method</label>
               <div className="space-y-1">
-                {paymentMethods.map(method => (
+                {options.payment_methods.map(method => (
                   <label key={method} className="flex items-center gap-2 py-1 cursor-pointer hover:bg-gray-50 rounded px-1">
                     <input
                       type="checkbox"
@@ -245,20 +264,19 @@ export const FilterPanel = () => {
                 ))}
               </div>
             </div>
+            )}
           </div>
         )}
       </div>
+      )}
 
       {/* Filter Actions */}
-      <div className="mt-4 pt-3 border-t border-gray-200 flex gap-2 px-2">
+      <div className="mt-4 pt-3 border-t border-gray-200 px-2">
         <button
-          onClick={resetFilters}
-          className="flex-1 px-3 py-2 text-xs font-medium text-gray-700 border border-gray-300 rounded hover:bg-gray-50 transition-colors"
+          onClick={() => { resetFilters(); clearAllCrossFilters(); }}
+          className="w-full px-3 py-2 text-xs font-medium text-gray-700 border border-gray-300 rounded hover:bg-gray-50 transition-colors"
         >
           Reset All
-        </button>
-        <button className="flex-1 px-3 py-2 text-xs font-medium text-white bg-teal-600 rounded hover:bg-teal-700 transition-colors">
-          Apply Filters
         </button>
       </div>
     </div>

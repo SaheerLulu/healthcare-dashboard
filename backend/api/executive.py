@@ -119,10 +119,100 @@ def inventory_alerts(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def pending_actions(request):
-    pending_purchases = ReportPurchases.objects.filter(state='pending_approval').count()
+    from decimal import Decimal
+    f = parse_filters(request)
+
+    pending_po_qs = ReportPurchases.objects.filter(state='pending_approval')
+    pending_po_count = pending_po_qs.count()
+    pending_po_value = float(pending_po_qs.aggregate(total=Sum('line_total'))['total'] or 0)
+
     pending_gst = ReportGST.objects.filter(source_table='gstr3b', filing_status='draft').count()
 
+    # Unpaid credit from sales
+    credit_qs = apply_common_filters(ReportSales.objects.filter(payment_method='Credit', status='unpaid'), f)
+    unpaid_credit_count = credit_qs.count()
+    unpaid_credit_value = float(credit_qs.aggregate(total=Sum('line_total'))['total'] or 0)
+
     return Response({
-        'pending_purchase_approvals': pending_purchases,
+        'pending_po_count': pending_po_count,
+        'pending_po_value': pending_po_value,
+        'unpaid_credit_count': unpaid_credit_count,
+        'unpaid_credit_value': unpaid_credit_value,
         'pending_gst_filings': pending_gst,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def today_sales(request):
+    from datetime import date as dt_date, timedelta as td
+    f = parse_filters(request)
+    qs = apply_common_filters(ReportSales.objects.all(), f)
+
+    agg = qs.aggregate(
+        total_revenue=Sum('line_total'),
+        total_qty=Sum('quantity'),
+    )
+    order_count = qs.values('source_id').distinct().count()
+    revenue = float(agg['total_revenue'] or 0)
+    avg_basket = round(revenue / order_count, 2) if order_count else 0
+
+    # Compare with previous period of same length
+    start = dt_date.fromisoformat(f['start_date'])
+    end = dt_date.fromisoformat(f['end_date'])
+    period_days = (end - start).days + 1
+    prev_start = start - td(days=period_days)
+    prev_end = start - td(days=1)
+    prev_revenue = float(
+        ReportSales.objects.filter(sale_date__gte=prev_start, sale_date__lte=prev_end)
+        .aggregate(total=Sum('line_total'))['total'] or 0
+    )
+    growth = round((revenue - prev_revenue) / prev_revenue * 100, 1) if prev_revenue else 0
+
+    # Build period label
+    today = dt_date.today()
+    if start == end == today:
+        period_label = 'Today'
+    elif start == end:
+        period_label = start.strftime('%d %b %Y')
+    elif start.month == end.month and start.year == end.year:
+        period_label = start.strftime('%b %Y')
+    else:
+        period_label = f"{start.strftime('%d %b')} - {end.strftime('%d %b %Y')}"
+
+    return Response({
+        'orders': order_count,
+        'revenue': revenue,
+        'avg_basket': avg_basket,
+        'growth_pct': growth,
+        'period_label': period_label,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def filter_options(request):
+    """Return dynamic filter options from the database."""
+    locations = list(
+        ReportSales.objects.values('location_id', 'location_name')
+        .distinct().order_by('location_id')
+    )
+    categories = list(
+        ReportSales.objects.values_list('product_category', flat=True)
+        .distinct().order_by('product_category')
+    )
+    channels = list(
+        ReportSales.objects.values_list('channel', flat=True)
+        .distinct().order_by('channel')
+    )
+    payment_methods = list(
+        ReportSales.objects.values_list('payment_method', flat=True)
+        .distinct().order_by('payment_method')
+    )
+
+    return Response({
+        'locations': [{'id': str(l['location_id']), 'name': l['location_name'] or f"Location {l['location_id']}"} for l in locations],
+        'categories': [c for c in categories if c],
+        'channels': [c for c in channels if c],
+        'payment_methods': [p for p in payment_methods if p],
     })

@@ -9,6 +9,7 @@ export interface CrossFilter {
 interface CrossFilterContextType {
   activeFilters: CrossFilter[];
   addCrossFilter: (filter: CrossFilter) => void;
+  toggleCrossFilter: (filter: CrossFilter) => void;
   removeCrossFilter: (id: string) => void;
   clearAllCrossFilters: () => void;
   isFiltered: (dimension: string, value: string) => boolean;
@@ -27,6 +28,22 @@ export const CrossFilterProvider: React.FC<{ children: ReactNode }> = ({ childre
         // Replace existing filter
         return prev.map(f => f.id === filter.id ? filter : f);
       }
+      return [...prev, filter];
+    });
+  };
+
+  const toggleCrossFilter = (filter: CrossFilter) => {
+    setActiveFilters(prev => {
+      const existing = prev.find(f => f.id === filter.id);
+      if (existing && existing.value === filter.value) {
+        // Same value clicked again → remove (deselect)
+        return prev.filter(f => f.id !== filter.id);
+      }
+      if (existing) {
+        // Same dimension, different value → replace
+        return prev.map(f => f.id === filter.id ? filter : f);
+      }
+      // New dimension → add
       return [...prev, filter];
     });
   };
@@ -51,7 +68,7 @@ export const CrossFilterProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   return (
     <CrossFilterContext.Provider 
-      value={{ activeFilters, addCrossFilter, removeCrossFilter, clearAllCrossFilters, isFiltered }}
+      value={{ activeFilters, addCrossFilter, toggleCrossFilter, removeCrossFilter, clearAllCrossFilters, isFiltered }}
     >
       {children}
     </CrossFilterContext.Provider>

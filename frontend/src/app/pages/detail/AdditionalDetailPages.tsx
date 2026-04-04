@@ -313,6 +313,57 @@ export const AuditDetailData = () => {
   );
 };
 
+// Sales Returns Detail Data
+export const SalesReturnsDetailData = () => {
+  const { data: apiReturnsDetail } = useApiData<any>('/sales/returns/detail/', { results: [] });
+  const rows = apiReturnsDetail.results || [];
+
+  return (
+    <DetailPageWrapper title="Sales Returns Detail Data" subtitle={`Showing ${rows.length} returns | Total: ₹${(rows.reduce((s: number, i: any) => s + (Number(i.line_total) || 0), 0) / 1000).toFixed(2)}K`}>
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left py-3 px-4 font-semibold text-gray-700">Date</th>
+                <th className="text-left py-3 px-4 font-semibold text-gray-700">Return No</th>
+                <th className="text-left py-3 px-4 font-semibold text-gray-700">Type</th>
+                <th className="text-left py-3 px-4 font-semibold text-gray-700">Orig. Invoice</th>
+                <th className="text-left py-3 px-4 font-semibold text-gray-700">Customer</th>
+                <th className="text-left py-3 px-4 font-semibold text-gray-700">Product</th>
+                <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
+                <th className="text-right py-3 px-4 font-semibold text-gray-700">Qty</th>
+                <th className="text-right py-3 px-4 font-semibold text-gray-700">Price</th>
+                <th className="text-right py-3 px-4 font-semibold text-gray-700">Total</th>
+                <th className="text-left py-3 px-4 font-semibold text-gray-700">Reason</th>
+                <th className="text-left py-3 px-4 font-semibold text-gray-700">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row: any, i: number) => (
+                <tr key={i} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                  <td className="py-3 px-4 text-gray-900">{row.return_date}</td>
+                  <td className="py-3 px-4 text-gray-900 font-medium">{row.return_no}</td>
+                  <td className="py-3 px-4"><span className={`inline-flex px-2 py-1 text-xs font-medium rounded ${row.return_type === 'pos' ? 'bg-teal-100 text-teal-700' : 'bg-indigo-100 text-indigo-700'}`}>{(row.return_type || '').toUpperCase()}</span></td>
+                  <td className="py-3 px-4 text-gray-600">{row.original_invoice_no}</td>
+                  <td className="py-3 px-4 text-gray-900">{row.customer_name}</td>
+                  <td className="py-3 px-4 text-gray-900">{row.product_name}</td>
+                  <td className="py-3 px-4 text-gray-600">{row.product_category}</td>
+                  <td className="py-3 px-4 text-right text-gray-900">{row.quantity}</td>
+                  <td className="py-3 px-4 text-right text-gray-900">₹{(Number(row.unit_price) || 0).toFixed(2)}</td>
+                  <td className="py-3 px-4 text-right text-gray-900 font-semibold">₹{(Number(row.line_total) || 0).toFixed(2)}</td>
+                  <td className="py-3 px-4 text-gray-600">{row.reason}</td>
+                  <td className="py-3 px-4"><span className={`inline-flex px-2 py-1 text-xs font-medium rounded ${row.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{row.status}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </DetailPageWrapper>
+  );
+};
+
 // Expense Detail Data
 export const ExpenseDetailData = () => {
   const { data: apiExpDetail } = useApiData<any>('/expense/detail/', { results: [] });

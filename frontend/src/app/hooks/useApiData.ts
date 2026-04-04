@@ -8,9 +8,9 @@ function filtersToParams(filters: GlobalFilters): Record<string, string> {
   if (filters.dateRange.start) params.start_date = filters.dateRange.start;
   if (filters.dateRange.end) params.end_date = filters.dateRange.end;
   if (filters.locations.length) params.location_ids = filters.locations.join(',');
-  if (filters.salesChannel.length === 1) params.channel = filters.salesChannel[0];
-  if (filters.paymentMethod.length === 1) params.payment_method = filters.paymentMethod[0];
-  if (filters.productCategories.length === 1) params.category = filters.productCategories[0];
+  if (filters.salesChannel.length) params.channel = filters.salesChannel.join(',');
+  if (filters.paymentMethod.length) params.payment_method = filters.paymentMethod.join(',');
+  if (filters.productCategories.length) params.category = filters.productCategories.join(',');
   return params;
 }
 

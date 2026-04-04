@@ -138,16 +138,15 @@ def gst_detail(request):
     f = parse_filters(request)
     qs = ReportGST.objects.filter(
         period__gte=f['start_date'][:7], period__lte=f['end_date'][:7],
-    ).order_by('-period')
-
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    data = list(page.values(
+    ).order_by('-period').values(
         'source_table', 'period', 'invoice_no', 'invoice_type',
         'taxable_value', 'gst_rate', 'cgst', 'sgst', 'igst',
         'customer_gstin', 'supplier_gstin', 'location_name',
-    )) if page else []
-    return paginator.get_paginated_response(data)
+    )
+
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    return paginator.get_paginated_response(list(page) if page else [])
 
 
 @api_view(['GET'])
@@ -202,16 +201,15 @@ def tds_deductions(request):
     f = parse_filters(request)
     qs = ReportTDS.objects.filter(
         transaction_date__gte=f['start_date'], transaction_date__lte=f['end_date'],
-    ).order_by('-transaction_date')
-
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    data = list(page.values(
+    ).order_by('-transaction_date').values(
         'transaction_date', 'deductee_name', 'deductee_pan', 'section',
         'nature_of_payment', 'gross_amount', 'tds_rate', 'tds_amount',
         'status', 'challan_no',
-    )) if page else []
-    return paginator.get_paginated_response(data)
+    )
+
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    return paginator.get_paginated_response(list(page) if page else [])
 
 
 @api_view(['GET'])
@@ -272,13 +270,12 @@ def tds_detail(request):
     f = parse_filters(request)
     qs = ReportTDS.objects.filter(
         transaction_date__gte=f['start_date'], transaction_date__lte=f['end_date'],
-    ).order_by('-transaction_date')
-
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    data = list(page.values(
+    ).order_by('-transaction_date').values(
         'transaction_date', 'deductee_name', 'section', 'deductee_type',
         'nature_of_payment', 'gross_amount', 'tds_rate', 'tds_amount',
         'status', 'challan_no', 'challan_date', 'location_name',
-    )) if page else []
-    return paginator.get_paginated_response(data)
+    )
+
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    return paginator.get_paginated_response(list(page) if page else [])

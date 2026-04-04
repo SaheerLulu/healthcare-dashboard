@@ -196,12 +196,12 @@ def detail(request):
     ).order_by('-bill_date')
     if 'location_id' in f:
         qs = qs.filter(location_id=f['location_id'])
-
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    data = list(page.values(
+    qs = qs.values(
         'bill_date', 'bill_no', 'supplier_name', 'product_name',
         'product_category', 'quantity', 'purchase_rate', 'mrp',
         'tax_percent', 'line_total', 'is_return', 'location_name',
-    )) if page else []
-    return paginator.get_paginated_response(data)
+    )
+
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    return paginator.get_paginated_response(list(page) if page else [])

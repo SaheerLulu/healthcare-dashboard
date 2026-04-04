@@ -197,28 +197,26 @@ def expense_detail(request):
     f = parse_filters(request)
     qs = apply_financial_filters(
         ReportFinancial.objects.filter(is_posted=True, account_type='EXPENSE'), f
-    ).order_by('-entry_date')
+    ).order_by('-entry_date').values(
+        'entry_date', 'account_name', 'narration', 'debit',
+        'party_name', 'voucher_type',
+    )
 
     paginator = PageNumberPagination()
     page = paginator.paginate_queryset(qs, request)
-    data = list(page.values(
-        'entry_date', 'account_name', 'narration', 'debit',
-        'party_name', 'voucher_type',
-    )) if page else []
-    return paginator.get_paginated_response(data)
+    return paginator.get_paginated_response(list(page) if page else [])
 
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def detail(request):
     f = parse_filters(request)
-    qs = apply_financial_filters(ReportFinancial.objects.all(), f).order_by('-entry_date')
-
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    data = list(page.values(
+    qs = apply_financial_filters(ReportFinancial.objects.all(), f).order_by('-entry_date').values(
         'entry_date', 'entry_no', 'voucher_type', 'account_code',
         'account_name', 'account_type', 'debit', 'credit', 'narration',
         'party_name', 'location_name',
-    )) if page else []
-    return paginator.get_paginated_response(data)
+    )
+
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    return paginator.get_paginated_response(list(page) if page else [])

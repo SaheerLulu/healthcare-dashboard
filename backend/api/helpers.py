@@ -31,11 +31,20 @@ def parse_filters(request):
     elif location_ids:
         filters['location_ids'] = [int(x) for x in location_ids.split(',') if x.strip()]
     if category:
-        filters['category'] = category
+        if ',' in category:
+            filters['categories'] = [x.strip() for x in category.split(',') if x.strip()]
+        else:
+            filters['category'] = category
     if channel:
-        filters['channel'] = channel
+        if ',' in channel:
+            filters['channels'] = [x.strip() for x in channel.split(',') if x.strip()]
+        else:
+            filters['channel'] = channel
     if payment_method:
-        filters['payment_method'] = payment_method
+        if ',' in payment_method:
+            filters['payment_methods'] = [x.strip() for x in payment_method.split(',') if x.strip()]
+        else:
+            filters['payment_method'] = payment_method
 
     return filters
 
@@ -49,11 +58,17 @@ def apply_common_filters(qs, filters, date_field='sale_date'):
     elif 'location_ids' in filters:
         qs = qs.filter(location_id__in=filters['location_ids'])
 
-    if 'category' in filters:
+    if 'categories' in filters:
+        qs = qs.filter(product_category__in=filters['categories'])
+    elif 'category' in filters:
         qs = qs.filter(product_category=filters['category'])
-    if 'channel' in filters:
+    if 'channels' in filters:
+        qs = qs.filter(channel__in=filters['channels'])
+    elif 'channel' in filters:
         qs = qs.filter(channel=filters['channel'])
-    if 'payment_method' in filters:
+    if 'payment_methods' in filters:
+        qs = qs.filter(payment_method__in=filters['payment_methods'])
+    elif 'payment_method' in filters:
         qs = qs.filter(payment_method=filters['payment_method'])
 
     return qs

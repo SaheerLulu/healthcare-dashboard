@@ -5,7 +5,7 @@ import { ChartCard } from '../components/ChartCard';
 import { ContextMenu } from '../components/ContextMenu';
 import { useCrossFilter } from '../contexts/CrossFilterContext';
 import { useApiData } from '../hooks/useApiData';
-import { toMonthlyTrend, numericize } from '../services/transforms';
+import { numericize } from '../services/transforms';
 import { formatIndianCurrencyAbbreviated } from '../utils/formatters';
 import {
   BarChart,
@@ -24,96 +24,93 @@ import {
   Cell,
 } from 'recharts';
 
+const TEAL = '#0D9488';
+const INDIGO = '#4F46E5';
+
 export const FinancialDeepDive = () => {
   const [activeTab, setActiveTab] = useState<'pl' | 'bridge' | 'balance' | 'cashflow' | 'ratios'>('pl');
   const navigate = useNavigate();
-  const { addCrossFilter, activeFilters } = useCrossFilter();
+  const { toggleCrossFilter, activeFilters, isFiltered } = useCrossFilter();
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
     x: number;
     y: number;
     page: string;
-  }>({
-    visible: false,
-    x: 0,
-    y: 0,
-    page: '',
-  });
+  }>({ visible: false, x: 0, y: 0, page: '' });
 
   // API integration
   const { data: apiPnl } = useApiData<any>('/financial/pnl/', {});
   const { data: apiPnlTrend } = useApiData<any[]>('/financial/pnl-trend/', []);
   const { data: apiExpenses } = useApiData<any[]>('/financial/expense-breakdown/', []);
   const { data: apiBalanceSheet } = useApiData<any>('/financial/balance-sheet/', {});
-  const { data: apiCashFlow } = useApiData<any[]>('/financial/cash-flow/', []);
-  const { data: apiRatios } = useApiData<any[]>('/financial/ratios/', []);
+  const { data: apiCashFlow } = useApiData<any>('/financial/cash-flow/', {});
+  const { data: apiRatios } = useApiData<any>('/financial/ratios/', {});
   const { data: apiProfitBridge } = useApiData<any[]>('/financial/profit-bridge/', []);
 
-  // Transform API data
-  const plTrendData = apiPnlTrend.map((r: any) => ({
-    month: r.month || '', revenue: Number(r.revenue) || 0, cogs: Number(r.expenses) * 0.6 || 0,
-    grossProfit: Number(r.revenue) - Number(r.expenses) * 0.6, opex: Number(r.expenses) * 0.4 || 0,
-    netProfit: Number(r.net_profit) || 0,
-  }));
+  // Transform P&L trend — use API's cogs and operating_expenses from pnl endpoint
+  const cogs = Number(apiPnl.cogs) || 0;
+  const opex = Number(apiPnl.operating_expenses) || 0;
+  const totalExpenses = cogs + opex;
+  const cogsRatio = totalExpenses > 0 ? cogs / totalExpenses : 0.6;
+
+  const plTrendData = apiPnlTrend.map((r: any) => {
+    const revenue = Number(r.revenue) || 0;
+    const expenses = Number(r.expenses) || 0;
+    const cogsPart = expenses * cogsRatio;
+    const grossProfit = revenue - cogsPart;
+    return {
+      month: r.month || '',
+      revenue,
+      cogs: cogsPart,
+      grossProfit,
+      opex: expenses - cogsPart,
+      netProfit: Number(r.net_profit) || 0,
+    };
+  });
+
   const expenseBreakdownData = apiExpenses.map((r: any) => ({
-    name: r.account_name || r.category || '', value: Number(r.amount) || 0,
-    category: r.account_name || r.category || '', amount: Number(r.amount) || 0,
-    percent: Number(r.percent) || 0,
+    name: r.account_name || r.category || '',
+    category: r.account_name || r.category || '',
+    amount: Number(r.amount) || 0,
   }));
 
-  // Balance sheet data from API
-  const balanceSheetItems: { category: string; amount: number; type: string }[] = (() => {
-    const items: { category: string; amount: number; type: string }[] = [];
-    if (apiBalanceSheet.assets) {
-      for (const [key, val] of Object.entries(apiBalanceSheet.assets)) {
-        items.push({ category: key, amount: Number(val) || 0, type: 'asset' });
-      }
-    }
-    if (apiBalanceSheet.liabilities) {
-      for (const [key, val] of Object.entries(apiBalanceSheet.liabilities)) {
-        items.push({ category: key, amount: Number(val) || 0, type: 'liability' });
-      }
-    }
-    if (apiBalanceSheet.equity) {
-      for (const [key, val] of Object.entries(apiBalanceSheet.equity)) {
-        items.push({ category: key, amount: Number(val) || 0, type: 'equity' });
-      }
-    }
-    // If API returns a flat array instead of nested object
-    if (Array.isArray(apiBalanceSheet)) {
-      return (apiBalanceSheet as any[]).map((r: any) => ({
-        category: r.category || r.account_name || '',
-        amount: Number(r.amount) || 0,
-        type: r.type || 'asset',
-      }));
-    }
-    return items;
-  })();
-
-  // Cash flow data from API
-  const cashFlowItems = (Array.isArray(apiCashFlow) ? apiCashFlow : []).map((r: any) => ({
-    month: r.month || '',
-    operating: Number(r.operating) || 0,
-    investing: Number(r.investing) || 0,
-    financing: Number(r.financing) || 0,
-    net: Number(r.net) || 0,
+  // Balance sheet — API returns { total_assets, total_liabilities, total_equity, asset_breakdown: [...], liability_breakdown: [...] }
+  const assetItems = (apiBalanceSheet.asset_breakdown || []).map((r: any) => ({
+    category: r.account_name || r.account_subtype || '',
+    amount: Number(r.amount) || 0,
+    type: 'asset' as const,
   }));
-
-  // Financial ratios data from API
-  const ratiosItems = (Array.isArray(apiRatios) ? apiRatios : []).map((r: any) => numericize({
-    month: r.month || '',
-    currentRatio: Number(r.currentRatio || r.current_ratio) || 0,
-    debtEquity: Number(r.debtEquity || r.debt_equity) || 0,
-    roe: Number(r.roe) || 0,
-    roa: Number(r.roa) || 0,
+  const liabilityItems = (apiBalanceSheet.liability_breakdown || []).map((r: any) => ({
+    category: r.account_name || r.account_subtype || '',
+    amount: Number(r.amount) || 0,
+    type: 'liability' as const,
   }));
+  const balanceSheetItems = [...assetItems, ...liabilityItems];
 
-  // Profit bridge data from API
+  // Cash flow — API returns single object, wrap in array for chart
+  const cashFlowItems = apiCashFlow.operating !== undefined ? [{
+    month: 'Current',
+    operating: Number(apiCashFlow.operating) || 0,
+    investing: Number(apiCashFlow.investing) || 0,
+    financing: Number(apiCashFlow.financing) || 0,
+    net: Number(apiCashFlow.net_cash_flow) || 0,
+  }] : [];
+
+  // Ratios — API returns single object, wrap for chart
+  const ratiosItems = apiRatios.current_ratio !== undefined ? [numericize({
+    month: 'Current',
+    currentRatio: Number(apiRatios.current_ratio) || 0,
+    debtEquity: Number(apiRatios.debt_to_equity) || 0,
+    roe: Number(apiRatios.roe) || 0,
+    roa: Number(apiRatios.roa) || 0,
+  })] : [];
+
+  // Profit bridge — already an array
   const profitBridgeItems = (Array.isArray(apiProfitBridge) ? apiProfitBridge : []).map((r: any) => ({
     name: r.name || '',
     value: Number(r.value) || 0,
     type: r.type || 'base',
-    color: r.type === 'positive' ? '#10B981' : r.type === 'negative' ? '#EF4444' : '#4F46E5',
+    color: r.type === 'positive' ? '#10B981' : r.type === 'negative' ? '#EF4444' : INDIGO,
   }));
 
   const tabs = [
@@ -124,78 +121,56 @@ export const FinancialDeepDive = () => {
     { id: 'ratios', label: 'Financial Ratios' },
   ];
 
+  // Left-click: toggle cross-filter (select/deselect)
+  const handleChartSelect = (data: any, dimension: string) => {
+    if (data && data.activePayload && data.activePayload[0]) {
+      const payload = data.activePayload[0].payload;
+      const val = payload[dimension] || payload.name || payload.category;
+      if (val) {
+        toggleCrossFilter({ id: dimension, label: `${dimension}: ${val}`, value: val });
+      }
+    }
+  };
+
+  // Right-click: context menu for drill-through
   const handleChartRightClick = (e: MouseEvent, page: string) => {
     e.preventDefault();
-    setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      page,
-    });
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, page });
   };
 
-  const closeContextMenu = () => {
-    setContextMenu(prev => ({ ...prev, visible: false }));
-  };
-
-  const handleBarClick = (data: any, dimension: string) => {
-    if (data && data.activePayload && data.activePayload[0]) {
-      const payload = data.activePayload[0].payload;
-      const filter = {
-        id: dimension,
-        label: `${dimension}: ${payload[dimension]}`,
-        value: payload[dimension],
-      };
-      // Navigate to detail page with drill-through context
-      handleDrillThrough('/detail/financial', filter);
-    }
-  };
-
-  const handleChartClick = (data: any, dimension: string, detailPage: string = '/detail/financial') => {
-    if (data && data.activePayload && data.activePayload[0]) {
-      const payload = data.activePayload[0].payload;
-      const filter = {
-        id: dimension,
-        label: `${dimension}: ${payload[dimension]}`,
-        value: payload[dimension],
-      };
-      // Navigate to detail page with drill-through context
-      handleDrillThrough(detailPage, filter);
-    }
-  };
+  const closeContextMenu = () => setContextMenu(prev => ({ ...prev, visible: false }));
 
   const handleDrillThrough = (page: string, filter?: any) => {
     navigate(page, {
       state: {
         drillThrough: {
           from: 'Financial Deep Dive',
-          filters: activeFilters.length > 0 ? activeFilters : filter ? [filter] : [],
+          filters: filter ? [filter] : activeFilters.length > 0 ? activeFilters : [],
         },
       },
     });
   };
 
-  // Apply cross-filtering
-  const filteredPLData = plTrendData.filter(item =>
-    !activeFilters.length || activeFilters.some(f => f.value === item.month)
-  );
+  const hasFilter = (dimension: string) => activeFilters.some(f => f.id === dimension);
 
-  const filteredCashFlowData = cashFlowItems.filter(item =>
-    !activeFilters.length || activeFilters.some(f => f.value === item.month)
-  );
-
-  // Derive KPI values from API data
-  const netRevenue = Number(apiPnl.revenue || apiPnl.total_revenue) || 0;
+  // KPI values
+  const netRevenue = Number(apiPnl.revenue) || 0;
   const grossProfit = Number(apiPnl.gross_profit) || 0;
   const netProfit = Number(apiPnl.net_profit) || 0;
   const grossMargin = netRevenue ? ((grossProfit / netRevenue) * 100).toFixed(1) : '0.0';
   const netMargin = netRevenue ? ((netProfit / netRevenue) * 100).toFixed(1) : '0.0';
-  const totalAssets = balanceSheetItems.filter(i => i.type === 'asset').reduce((s, i) => s + i.amount, 0);
-  const currentAssets = Number(apiBalanceSheet.current_assets) || totalAssets;
-  const totalLiabilities = balanceSheetItems.filter(i => i.type === 'liability').reduce((s, i) => s + i.amount, 0);
-  const currentLiabilities = Number(apiBalanceSheet.current_liabilities) || totalLiabilities;
-  const workingCapital = currentAssets - currentLiabilities;
-  const currentRatio = currentLiabilities ? (currentAssets / currentLiabilities).toFixed(1) : '0.0';
+  const totalAssets = Number(apiBalanceSheet.total_assets) || 0;
+  const totalLiabilities = Number(apiBalanceSheet.total_liabilities) || 0;
+  const workingCapital = totalAssets - totalLiabilities;
+  const currentRatio = totalLiabilities ? (totalAssets / totalLiabilities).toFixed(1) : '0.0';
+
+  // Filtered data for cross-filtering
+  const filteredPLData = plTrendData.filter(item =>
+    !hasFilter('month') || isFiltered('month', item.month)
+  );
+  const filteredCashFlowData = cashFlowItems.filter(item =>
+    !hasFilter('month') || isFiltered('month', item.month)
+  );
 
   return (
     <div>
@@ -213,37 +188,11 @@ export const FinancialDeepDive = () => {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-5 gap-4 mb-6">
-        <KPICard
-          title="Net Revenue"
-          value={formatIndianCurrencyAbbreviated(netRevenue)}
-          subtitle="Current Period"
-          trend={{ value: '', direction: 'up' }}
-          onClick={() => handleDrillThrough('/detail/financial')}
-        />
-        <KPICard
-          title="Gross Profit"
-          value={formatIndianCurrencyAbbreviated(grossProfit)}
-          subtitle={`Margin: ${grossMargin}%`}
-          trend={{ value: '', direction: 'up' }}
-        />
-        <KPICard
-          title="Net Profit"
-          value={formatIndianCurrencyAbbreviated(netProfit)}
-          subtitle={`Margin: ${netMargin}%`}
-          trend={{ value: '', direction: 'up' }}
-        />
-        <KPICard
-          title="Total Assets"
-          value={formatIndianCurrencyAbbreviated(totalAssets)}
-          subtitle={`Current: ${formatIndianCurrencyAbbreviated(currentAssets)}`}
-          trend={{ value: '', direction: 'up' }}
-        />
-        <KPICard
-          title="Working Capital"
-          value={formatIndianCurrencyAbbreviated(workingCapital)}
-          subtitle={`Current Ratio: ${currentRatio}`}
-          trend={{ value: '', direction: 'up' }}
-        />
+        <KPICard title="Net Revenue" value={formatIndianCurrencyAbbreviated(netRevenue)} subtitle="Current Period" onClick={() => handleDrillThrough('/detail/financial')} />
+        <KPICard title="Gross Profit" value={formatIndianCurrencyAbbreviated(grossProfit)} subtitle={`Margin: ${grossMargin}%`} />
+        <KPICard title="Net Profit" value={formatIndianCurrencyAbbreviated(netProfit)} subtitle={`Margin: ${netMargin}%`} />
+        <KPICard title="Total Assets" value={formatIndianCurrencyAbbreviated(totalAssets)} subtitle={`Liabilities: ${formatIndianCurrencyAbbreviated(totalLiabilities)}`} />
+        <KPICard title="Working Capital" value={formatIndianCurrencyAbbreviated(workingCapital)} subtitle={`Current Ratio: ${currentRatio}`} />
       </div>
 
       {/* Tabs */}
@@ -267,77 +216,51 @@ export const FinancialDeepDive = () => {
       {activeTab === 'pl' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard
-              title="Revenue & Profit Trends"
-              onDrillThrough={() => handleDrillThrough('/detail/financial')}
-            >
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')}
-                className="cursor-context-menu"
-              >
+            <ChartCard title="Revenue & Profit Trends" onDrillThrough={() => handleDrillThrough('/detail/financial')}>
+              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')} className="cursor-pointer">
                 <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart
-                    data={filteredPLData}
-                    onClick={(data) => handleChartClick(data, 'month')}
-                  >
+                  <ComposedChart data={filteredPLData} onClick={(data) => handleChartSelect(data, 'month')}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis
-                      yAxisId="left"
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(value) => `₹${(value / 100000).toFixed(1)}L`}
-                    />
-                    <YAxis
-                      yAxisId="right"
-                      orientation="right"
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(value) => `${value.toFixed(0)}%`}
-                    />
-                    <Tooltip
-                      formatter={(value: any, name: string) => {
-                        if (name === 'Margin') return `${Number(value).toFixed(1)}%`;
-                        return `₹${(Number(value) / 100000).toFixed(2)}L`;
-                      }}
-                    />
+                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
+                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v.toFixed(0)}%`} />
+                    <Tooltip formatter={(value: any, name: string) => {
+                      if (name === 'Margin') return `${Number(value).toFixed(1)}%`;
+                      return formatIndianCurrencyAbbreviated(Number(value));
+                    }} />
                     <Legend />
-                    <Bar yAxisId="left" dataKey="revenue" fill="#0D9488" name="Revenue" />
-                    <Bar yAxisId="left" dataKey="grossProfit" fill="#4F46E5" name="Gross Profit" />
-                    <Line
-                      yAxisId="right"
-                      type="monotone"
-                      dataKey={(data) => data.revenue ? Number(((data.grossProfit / data.revenue) * 100).toFixed(1)) : 0}
-                      stroke="#F59E0B"
-                      strokeWidth={2}
-                      name="Margin"
-                      dot={{ fill: '#F59E0B', r: 4 }}
-                    />
+                    <Bar yAxisId="left" dataKey="revenue" name="Revenue" cursor="pointer">
+                      {filteredPLData.map((entry, i) => (
+                        <Cell key={`rev-${i}`} fill={TEAL} stroke={hasFilter('month') && isFiltered('month', entry.month) ? '#065F46' : 'none'} strokeWidth={2} />
+                      ))}
+                    </Bar>
+                    <Bar yAxisId="left" dataKey="grossProfit" name="Gross Profit" cursor="pointer">
+                      {filteredPLData.map((entry, i) => (
+                        <Cell key={`gp-${i}`} fill={INDIGO} stroke={hasFilter('month') && isFiltered('month', entry.month) ? '#312E81' : 'none'} strokeWidth={2} />
+                      ))}
+                    </Bar>
+                    <Line yAxisId="right" type="monotone" stroke="#F59E0B" strokeWidth={2} name="Margin" dot={{ fill: '#F59E0B', r: 4 }}
+                      dataKey={(data: any) => data.revenue ? Number(((data.grossProfit / data.revenue) * 100).toFixed(1)) : 0} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
             </ChartCard>
 
             <ChartCard title="Expense Breakdown">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')}
-                className="cursor-context-menu"
-              >
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart
-                  data={expenseBreakdownData}
-                  layout="vertical"
-                  onClick={(data) => handleChartClick(data, 'category')}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis
-                    type="number"
-                    tick={{ fontSize: 12 }}
-                    tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}K`}
-                  />
-                  <YAxis type="category" dataKey="category" tick={{ fontSize: 12 }} width={80} />
-                  <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(2)}K`} />
-                  <Bar dataKey="amount" fill="#0D9488" cursor="pointer" />
-                </BarChart>
-              </ResponsiveContainer>
+              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/expense')} className="cursor-pointer">
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={expenseBreakdownData} layout="vertical" onClick={(data) => handleChartSelect(data, 'category')}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
+                    <YAxis type="category" dataKey="category" tick={{ fontSize: 12 }} width={100} />
+                    <Tooltip formatter={(value: any) => formatIndianCurrencyAbbreviated(value)} />
+                    <Bar dataKey="amount" cursor="pointer">
+                      {expenseBreakdownData.map((entry, i) => (
+                        <Cell key={`exp-${i}`} fill={TEAL} stroke={hasFilter('category') && isFiltered('category', entry.category) ? '#065F46' : 'none'} strokeWidth={2} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </ChartCard>
           </div>
@@ -359,39 +282,22 @@ export const FinancialDeepDive = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {plTrendData.map((item) => (
-                    <tr
-                      key={item.month}
-                      onClick={() => {
-                        addCrossFilter({
-                          id: 'month',
-                          label: `Month: ${item.month}`,
-                          value: item.month,
-                        });
-                      }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                    >
-                      <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
-                      <td className="py-2 px-2 text-right text-gray-900">
-                        ₹{(item.revenue / 100000).toFixed(2)}L
-                      </td>
-                      <td className="py-2 px-2 text-right text-gray-600">
-                        ₹{(item.cogs / 100000).toFixed(2)}L
-                      </td>
-                      <td className="py-2 px-2 text-right text-green-600 font-medium">
-                        ₹{(item.grossProfit / 100000).toFixed(2)}L
-                      </td>
-                      <td className="py-2 px-2 text-right text-gray-600">
-                        ₹{(item.opex / 100000).toFixed(2)}L
-                      </td>
-                      <td className="py-2 px-2 text-right text-green-600 font-semibold">
-                        ₹{(item.netProfit / 100000).toFixed(2)}L
-                      </td>
-                      <td className="py-2 px-2 text-right text-gray-900">
-                        {item.revenue ? ((item.netProfit / item.revenue) * 100).toFixed(1) : '0.0'}%
-                      </td>
-                    </tr>
-                  ))}
+                  {plTrendData.map((item) => {
+                    const selected = hasFilter('month') && isFiltered('month', item.month);
+                    return (
+                      <tr key={item.month}
+                        onClick={() => toggleCrossFilter({ id: 'month', label: `Month: ${item.month}`, value: item.month })}
+                        className={`border-b border-gray-100 cursor-pointer transition-colors ${selected ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}>
+                        <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
+                        <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(item.revenue)}</td>
+                        <td className="py-2 px-2 text-right text-gray-600">{formatIndianCurrencyAbbreviated(item.cogs)}</td>
+                        <td className="py-2 px-2 text-right text-green-600 font-medium">{formatIndianCurrencyAbbreviated(item.grossProfit)}</td>
+                        <td className="py-2 px-2 text-right text-gray-600">{formatIndianCurrencyAbbreviated(item.opex)}</td>
+                        <td className="py-2 px-2 text-right text-green-600 font-semibold">{formatIndianCurrencyAbbreviated(item.netProfit)}</td>
+                        <td className="py-2 px-2 text-right text-gray-900">{item.revenue ? ((item.netProfit / item.revenue) * 100).toFixed(1) : '0.0'}%</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -403,34 +309,17 @@ export const FinancialDeepDive = () => {
       {activeTab === 'bridge' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard
-              title="Profit Bridge"
-              onDrillThrough={() => handleDrillThrough('/detail/financial')}
-            >
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')}
-                className="cursor-context-menu"
-              >
+            <ChartCard title="Profit Bridge" onDrillThrough={() => handleDrillThrough('/detail/financial')}>
+              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')} className="cursor-pointer">
                 <ResponsiveContainer width="100%" height={300}>
-                  <BarChart
-                    data={profitBridgeItems}
-                    onClick={(data) => handleChartClick(data, 'name')}
-                  >
+                  <BarChart data={profitBridgeItems} onClick={(data) => handleChartSelect(data, 'name')}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                    <YAxis
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(value) => `₹${(value / 100000).toFixed(1)}L`}
-                    />
-                    <Tooltip formatter={(value: any) => `₹${(value / 100000).toFixed(2)}L`} />
-                    <Legend />
-                    <Bar
-                      dataKey="value"
-                      cursor="pointer"
-                      name="Profit Bridge"
-                    >
-                      {profitBridgeItems.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
+                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
+                    <Tooltip formatter={(value: any) => formatIndianCurrencyAbbreviated(value)} />
+                    <Bar dataKey="value" cursor="pointer" name="Profit Bridge">
+                      {profitBridgeItems.map((entry, i) => (
+                        <Cell key={`bridge-${i}`} fill={entry.color} stroke={hasFilter('name') && isFiltered('name', entry.name) ? '#1F2937' : 'none'} strokeWidth={2} />
                       ))}
                     </Bar>
                   </BarChart>
@@ -439,39 +328,29 @@ export const FinancialDeepDive = () => {
             </ChartCard>
           </div>
 
-          {/* Profit Bridge Table */}
           <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
             <h3 className="text-sm font-semibold text-gray-900 mb-4">Profit Bridge</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left py-2 px-2 font-medium text-gray-600">Item</th>
-                    <th className="text-right py-2 px-2 font-medium text-gray-600">Value</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {profitBridgeItems.map((item) => (
-                    <tr
-                      key={item.name}
-                      onClick={() => {
-                        addCrossFilter({
-                          id: 'name',
-                          label: `Item: ${item.name}`,
-                          value: item.name,
-                        });
-                      }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                    >
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-200">
+                  <th className="text-left py-2 px-2 font-medium text-gray-600">Item</th>
+                  <th className="text-right py-2 px-2 font-medium text-gray-600">Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {profitBridgeItems.map((item) => {
+                  const selected = hasFilter('name') && isFiltered('name', item.name);
+                  return (
+                    <tr key={item.name}
+                      onClick={() => toggleCrossFilter({ id: 'name', label: `Item: ${item.name}`, value: item.name })}
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${selected ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}>
                       <td className="py-2 px-2 font-medium text-gray-900">{item.name}</td>
-                      <td className="py-2 px-2 text-right text-gray-900">
-                        ₹{(item.value / 100000).toFixed(2)}L
-                      </td>
+                      <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(item.value)}</td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </>
       )}
@@ -481,148 +360,100 @@ export const FinancialDeepDive = () => {
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
             <ChartCard title="Assets Composition">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')}
-                className="cursor-context-menu"
-              >
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart
-                  data={balanceSheetItems.filter(item => item.type === 'asset')}
-                  onClick={(data) => handleChartClick(data, 'category')}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="category" tick={{ fontSize: 12 }} angle={-15} textAnchor="end" height={80} />
-                  <YAxis
-                    tick={{ fontSize: 12 }}
-                    tickFormatter={(value) => `₹${(value / 100000).toFixed(1)}L`}
-                  />
-                  <Tooltip formatter={(value: any) => `₹${(value / 100000).toFixed(2)}L`} />
-                  <Bar dataKey="amount" fill="#0D9488" cursor="pointer" />
-                </BarChart>
-              </ResponsiveContainer>
+              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')} className="cursor-pointer">
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={assetItems} onClick={(data) => handleChartSelect(data, 'category')}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="category" tick={{ fontSize: 11 }} angle={-15} textAnchor="end" height={80} />
+                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
+                    <Tooltip formatter={(value: any) => formatIndianCurrencyAbbreviated(value)} />
+                    <Bar dataKey="amount" cursor="pointer">
+                      {assetItems.map((entry, i) => (
+                        <Cell key={`asset-${i}`} fill={TEAL} stroke={hasFilter('category') && isFiltered('category', entry.category) ? '#065F46' : 'none'} strokeWidth={2} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </ChartCard>
 
             <ChartCard title="Liabilities & Equity">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')}
-                className="cursor-context-menu"
-              >
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart
-                  data={balanceSheetItems.filter(item => item.type !== 'asset')}
-                  onClick={(data) => handleChartClick(data, 'category')}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="category" tick={{ fontSize: 12 }} />
-                  <YAxis
-                    tick={{ fontSize: 12 }}
-                    tickFormatter={(value) => `₹${(value / 100000).toFixed(1)}L`}
-                  />
-                  <Tooltip formatter={(value: any) => `₹${(value / 100000).toFixed(2)}L`} />
-                  <Bar dataKey="amount" fill="#4F46E5" cursor="pointer" />
-                </BarChart>
-              </ResponsiveContainer>
+              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')} className="cursor-pointer">
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={liabilityItems} onClick={(data) => handleChartSelect(data, 'category')}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="category" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
+                    <Tooltip formatter={(value: any) => formatIndianCurrencyAbbreviated(value)} />
+                    <Bar dataKey="amount" cursor="pointer">
+                      {liabilityItems.map((entry, i) => (
+                        <Cell key={`liab-${i}`} fill={INDIGO} stroke={hasFilter('category') && isFiltered('category', entry.category) ? '#312E81' : 'none'} strokeWidth={2} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </ChartCard>
           </div>
 
-          {/* Balance Sheet Table */}
+          {/* Balance Sheet Tables */}
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
               <h3 className="text-sm font-semibold text-gray-900 mb-4">Assets</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-gray-200">
-                      <th className="text-left py-2 px-2 font-medium text-gray-600">Category</th>
-                      <th className="text-right py-2 px-2 font-medium text-gray-600">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {balanceSheetItems
-                      .filter(item => item.type === 'asset')
-                      .map((item) => (
-                        <tr
-                          key={item.category}
-                          className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                          onClick={() => {
-                            addCrossFilter({
-                              id: 'category',
-                              label: `Category: ${item.category}`,
-                              value: item.category,
-                            });
-                          }}
-                        >
-                          <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
-                          <td className="py-2 px-2 text-right text-gray-900">
-                            ₹{(item.amount / 100000).toFixed(2)}L
-                          </td>
-                        </tr>
-                      ))}
-                    <tr className="border-t-2 border-gray-300 font-semibold">
-                      <td className="py-2 px-2 text-gray-900">Total Assets</td>
-                      <td className="py-2 px-2 text-right text-gray-900">
-                        ₹
-                        {(
-                          balanceSheetItems
-                            .filter(item => item.type === 'asset')
-                            .reduce((sum, item) => sum + item.amount, 0) / 100000
-                        ).toFixed(2)}
-                        L
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="text-left py-2 px-2 font-medium text-gray-600">Account</th>
+                    <th className="text-right py-2 px-2 font-medium text-gray-600">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {assetItems.map((item) => {
+                    const selected = hasFilter('category') && isFiltered('category', item.category);
+                    return (
+                      <tr key={item.category}
+                        onClick={() => toggleCrossFilter({ id: 'category', label: `Account: ${item.category}`, value: item.category })}
+                        className={`border-b border-gray-100 cursor-pointer transition-colors ${selected ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}>
+                        <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
+                        <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(item.amount)}</td>
+                      </tr>
+                    );
+                  })}
+                  <tr className="border-t-2 border-gray-300 font-semibold">
+                    <td className="py-2 px-2 text-gray-900">Total Assets</td>
+                    <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(totalAssets)}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
 
             <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
               <h3 className="text-sm font-semibold text-gray-900 mb-4">Liabilities & Equity</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-gray-200">
-                      <th className="text-left py-2 px-2 font-medium text-gray-600">Category</th>
-                      <th className="text-right py-2 px-2 font-medium text-gray-600">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {balanceSheetItems
-                      .filter(item => item.type !== 'asset')
-                      .map((item) => (
-                        <tr
-                          key={item.category}
-                          className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                          onClick={() => {
-                            addCrossFilter({
-                              id: 'category',
-                              label: `Category: ${item.category}`,
-                              value: item.category,
-                            });
-                          }}
-                        >
-                          <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
-                          <td className="py-2 px-2 text-right text-gray-900">
-                            ₹{(item.amount / 100000).toFixed(2)}L
-                          </td>
-                        </tr>
-                      ))}
-                    <tr className="border-t-2 border-gray-300 font-semibold">
-                      <td className="py-2 px-2 text-gray-900">Total Liabilities & Equity</td>
-                      <td className="py-2 px-2 text-right text-gray-900">
-                        ₹
-                        {(
-                          balanceSheetItems
-                            .filter(item => item.type !== 'asset')
-                            .reduce((sum, item) => sum + item.amount, 0) / 100000
-                        ).toFixed(2)}
-                        L
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="text-left py-2 px-2 font-medium text-gray-600">Account</th>
+                    <th className="text-right py-2 px-2 font-medium text-gray-600">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {liabilityItems.map((item) => {
+                    const selected = hasFilter('category') && isFiltered('category', item.category);
+                    return (
+                      <tr key={item.category}
+                        onClick={() => toggleCrossFilter({ id: 'category', label: `Account: ${item.category}`, value: item.category })}
+                        className={`border-b border-gray-100 cursor-pointer transition-colors ${selected ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}>
+                        <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
+                        <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(item.amount)}</td>
+                      </tr>
+                    );
+                  })}
+                  <tr className="border-t-2 border-gray-300 font-semibold">
+                    <td className="py-2 px-2 text-gray-900">Total Liabilities & Equity</td>
+                    <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(totalLiabilities + Number(apiBalanceSheet.total_equity || 0))}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </>
@@ -632,132 +463,67 @@ export const FinancialDeepDive = () => {
       {activeTab === 'cashflow' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard
-              title="Cash Flow Trends"
-              onDrillThrough={() => handleDrillThrough('/detail/financial')}
-            >
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')}
-                className="cursor-context-menu"
-              >
+            <ChartCard title="Cash Flow Breakdown" onDrillThrough={() => handleDrillThrough('/detail/financial')}>
+              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')} className="cursor-pointer">
                 <ResponsiveContainer width="100%" height={300}>
-                  <LineChart
-                    data={filteredCashFlowData}
-                    onClick={(data) => handleChartClick(data, 'month')}
-                  >
+                  <BarChart data={filteredCashFlowData} onClick={(data) => handleChartSelect(data, 'month')}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}K`}
-                    />
-                    <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(2)}K`} />
+                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
+                    <Tooltip formatter={(value: any) => formatIndianCurrencyAbbreviated(value)} />
                     <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="operating"
-                      stroke="#0D9488"
-                      strokeWidth={2}
-                      name="Operating"
-                      dot={{ fill: '#0D9488', r: 4 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="investing"
-                      stroke="#EF4444"
-                      strokeWidth={2}
-                      name="Investing"
-                      dot={{ fill: '#EF4444', r: 4 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="financing"
-                      stroke="#F59E0B"
-                      strokeWidth={2}
-                      name="Financing"
-                      dot={{ fill: '#F59E0B', r: 4 }}
-                    />
-                  </LineChart>
+                    <Bar dataKey="operating" fill={TEAL} name="Operating" cursor="pointer" />
+                    <Bar dataKey="investing" fill="#EF4444" name="Investing" cursor="pointer" />
+                    <Bar dataKey="financing" fill="#F59E0B" name="Financing" cursor="pointer" />
+                  </BarChart>
                 </ResponsiveContainer>
               </div>
             </ChartCard>
 
             <ChartCard title="Net Cash Flow">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')}
-                className="cursor-context-menu"
-              >
-              <ResponsiveContainer width="100%" height={300}>
-                <AreaChart
-                  data={filteredCashFlowData}
-                  onClick={(data) => handleChartClick(data, 'month')}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                  <YAxis
-                    tick={{ fontSize: 12 }}
-                    tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}K`}
-                  />
-                  <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(2)}K`} />
-                  <Area
-                    type="monotone"
-                    dataKey="net"
-                    stroke="#0D9488"
-                    fill="#0D9488"
-                    fillOpacity={0.3}
-                    name="Net Cash Flow"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')} className="cursor-pointer">
+                <ResponsiveContainer width="100%" height={300}>
+                  <AreaChart data={filteredCashFlowData} onClick={(data) => handleChartSelect(data, 'month')}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
+                    <Tooltip formatter={(value: any) => formatIndianCurrencyAbbreviated(value)} />
+                    <Area type="monotone" dataKey="net" stroke={TEAL} fill={TEAL} fillOpacity={0.3} name="Net Cash Flow" />
+                  </AreaChart>
+                </ResponsiveContainer>
               </div>
             </ChartCard>
           </div>
 
-          {/* Cash Flow Table */}
           <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
             <h3 className="text-sm font-semibold text-gray-900 mb-4">Cash Flow Statement</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left py-2 px-2 font-medium text-gray-600">Month</th>
-                    <th className="text-right py-2 px-2 font-medium text-gray-600">Operating</th>
-                    <th className="text-right py-2 px-2 font-medium text-gray-600">Investing</th>
-                    <th className="text-right py-2 px-2 font-medium text-gray-600">Financing</th>
-                    <th className="text-right py-2 px-2 font-medium text-gray-600">Net Cash Flow</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cashFlowItems.map((item) => (
-                    <tr
-                      key={item.month}
-                      onClick={() => {
-                        addCrossFilter({
-                          id: 'month',
-                          label: `Month: ${item.month}`,
-                          value: item.month,
-                        });
-                      }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                    >
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-200">
+                  <th className="text-left py-2 px-2 font-medium text-gray-600">Period</th>
+                  <th className="text-right py-2 px-2 font-medium text-gray-600">Operating</th>
+                  <th className="text-right py-2 px-2 font-medium text-gray-600">Investing</th>
+                  <th className="text-right py-2 px-2 font-medium text-gray-600">Financing</th>
+                  <th className="text-right py-2 px-2 font-medium text-gray-600">Net Cash Flow</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cashFlowItems.map((item) => {
+                  const selected = hasFilter('month') && isFiltered('month', item.month);
+                  return (
+                    <tr key={item.month}
+                      onClick={() => toggleCrossFilter({ id: 'month', label: `Period: ${item.month}`, value: item.month })}
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${selected ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}>
                       <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
-                      <td className="py-2 px-2 text-right text-green-600">
-                        ₹{(item.operating / 1000).toFixed(0)}K
-                      </td>
-                      <td className="py-2 px-2 text-right text-red-600">
-                        ₹{(item.investing / 1000).toFixed(0)}K
-                      </td>
-                      <td className="py-2 px-2 text-right text-red-600">
-                        ₹{(item.financing / 1000).toFixed(0)}K
-                      </td>
-                      <td className="py-2 px-2 text-right text-green-600 font-semibold">
-                        ₹{(item.net / 1000).toFixed(0)}K
-                      </td>
+                      <td className="py-2 px-2 text-right text-green-600">{formatIndianCurrencyAbbreviated(item.operating)}</td>
+                      <td className="py-2 px-2 text-right text-red-600">{formatIndianCurrencyAbbreviated(item.investing)}</td>
+                      <td className="py-2 px-2 text-right text-red-600">{formatIndianCurrencyAbbreviated(item.financing)}</td>
+                      <td className="py-2 px-2 text-right text-green-600 font-semibold">{formatIndianCurrencyAbbreviated(item.net)}</td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </>
       )}
@@ -767,128 +533,79 @@ export const FinancialDeepDive = () => {
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
             <ChartCard title="Liquidity Ratios">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')}
-                className="cursor-context-menu"
-              >
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={ratiosItems} onClick={(data) => handleChartClick(data, 'month')}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} domain={[0, 3]} />
-                  <Tooltip formatter={(value: any) => Number(value).toFixed(2)} />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="currentRatio"
-                    stroke="#0D9488"
-                    strokeWidth={2}
-                    name="Current Ratio"
-                    dot={{ fill: '#0D9488', r: 5 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')} className="cursor-pointer">
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={ratiosItems} onClick={(data) => handleChartSelect(data, 'month')}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} />
+                    <Tooltip formatter={(value: any) => Number(value).toFixed(2)} />
+                    <Legend />
+                    <Bar dataKey="currentRatio" fill={TEAL} name="Current Ratio" cursor="pointer" />
+                    <Bar dataKey="debtEquity" fill={INDIGO} name="Debt/Equity" cursor="pointer" />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </ChartCard>
 
             <ChartCard title="Profitability Ratios">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')}
-                className="cursor-context-menu"
-              >
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={ratiosItems} onClick={(data) => handleChartClick(data, 'month')}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                  <YAxis
-                    tick={{ fontSize: 12 }}
-                    tickFormatter={(value) => `${value}%`}
-                    domain={[0, 8]}
-                  />
-                  <Tooltip formatter={(value: any) => `${Number(value).toFixed(1)}%`} />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="roe"
-                    stroke="#4F46E5"
-                    strokeWidth={2}
-                    name="ROE"
-                    dot={{ fill: '#4F46E5', r: 5 }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="roa"
-                    stroke="#F59E0B"
-                    strokeWidth={2}
-                    name="ROA"
-                    dot={{ fill: '#F59E0B', r: 5 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/financial')} className="cursor-pointer">
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={ratiosItems} onClick={(data) => handleChartSelect(data, 'month')}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
+                    <Tooltip formatter={(value: any) => `${Number(value).toFixed(1)}%`} />
+                    <Legend />
+                    <Bar dataKey="roe" fill={INDIGO} name="ROE" cursor="pointer" />
+                    <Bar dataKey="roa" fill="#F59E0B" name="ROA" cursor="pointer" />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </ChartCard>
           </div>
 
-          {/* Ratios Table */}
           <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
             <h3 className="text-sm font-semibold text-gray-900 mb-4">Financial Ratios</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left py-2 px-2 font-medium text-gray-600">Month</th>
-                    <th className="text-right py-2 px-2 font-medium text-gray-600">Current Ratio</th>
-                    <th className="text-right py-2 px-2 font-medium text-gray-600">Debt/Equity</th>
-                    <th className="text-right py-2 px-2 font-medium text-gray-600">ROE (%)</th>
-                    <th className="text-right py-2 px-2 font-medium text-gray-600">ROA (%)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ratiosItems.map((item) => (
-                    <tr
-                      key={item.month}
-                      onClick={() => {
-                        addCrossFilter({
-                          id: 'month',
-                          label: `Month: ${item.month}`,
-                          value: item.month,
-                        });
-                      }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                    >
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-200">
+                  <th className="text-left py-2 px-2 font-medium text-gray-600">Period</th>
+                  <th className="text-right py-2 px-2 font-medium text-gray-600">Current Ratio</th>
+                  <th className="text-right py-2 px-2 font-medium text-gray-600">Debt/Equity</th>
+                  <th className="text-right py-2 px-2 font-medium text-gray-600">ROE (%)</th>
+                  <th className="text-right py-2 px-2 font-medium text-gray-600">ROA (%)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ratiosItems.map((item) => {
+                  const selected = hasFilter('month') && isFiltered('month', item.month);
+                  return (
+                    <tr key={item.month}
+                      onClick={() => toggleCrossFilter({ id: 'month', label: `Period: ${item.month}`, value: item.month })}
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${selected ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}>
                       <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
-                      <td className="py-2 px-2 text-right text-gray-900">
-                        {Number(item.currentRatio).toFixed(2)}
-                      </td>
-                      <td className="py-2 px-2 text-right text-gray-900">
-                        {Number(item.debtEquity).toFixed(2)}
-                      </td>
-                      <td className="py-2 px-2 text-right text-green-600">
-                        {Number(item.roe).toFixed(1)}%
-                      </td>
-                      <td className="py-2 px-2 text-right text-green-600">
-                        {Number(item.roa).toFixed(1)}%
-                      </td>
+                      <td className="py-2 px-2 text-right text-gray-900">{Number(item.currentRatio).toFixed(2)}</td>
+                      <td className="py-2 px-2 text-right text-gray-900">{Number(item.debtEquity).toFixed(2)}</td>
+                      <td className="py-2 px-2 text-right text-green-600">{Number(item.roe).toFixed(1)}%</td>
+                      <td className="py-2 px-2 text-right text-green-600">{Number(item.roa).toFixed(1)}%</td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </>
       )}
 
-      {/* Context Menu */}
+      {/* Context Menu (right-click drill-through) */}
       {contextMenu.visible && (
         <ContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
           onClose={closeContextMenu}
           drillThroughTarget={contextMenu.page}
-          drillThroughContext={{
-            from: 'Financial Deep Dive',
-            filters: activeFilters,
-          }}
+          drillThroughContext={{ from: 'Financial Deep Dive', filters: activeFilters }}
         />
       )}
     </div>

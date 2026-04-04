@@ -382,14 +382,34 @@ def returns_profit_impact(request):
 @permission_classes([AllowAny])
 def detail(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f).order_by('-sale_date')
-
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-
-    data = list(page.values(
+    qs = apply_common_filters(ReportSales.objects.all(), f).order_by('-sale_date').values(
         'sale_date', 'invoice_no', 'channel', 'customer_name',
         'product_name', 'product_category', 'quantity', 'unit_price',
         'discount_amount', 'tax_percent', 'line_total', 'payment_method',
-    )) if page else []
-    return paginator.get_paginated_response(data)
+    )
+
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    return paginator.get_paginated_response(list(page) if page else [])
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def returns_detail(request):
+    f = parse_filters(request)
+    qs = ReportSalesReturns.objects.filter(
+        return_date__gte=f['start_date'], return_date__lte=f['end_date']
+    )
+    if 'location_id' in f:
+        qs = qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        qs = qs.filter(location_id__in=f['location_ids'])
+    qs = qs.order_by('-return_date').values(
+        'return_date', 'return_no', 'return_type', 'original_invoice_no',
+        'customer_name', 'product_name', 'product_category', 'batch_no',
+        'quantity', 'unit_price', 'line_total', 'reason', 'status',
+    )
+
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    return paginator.get_paginated_response(list(page) if page else [])

@@ -32,7 +32,7 @@ const COLORS = ['#0D9488', '#4F46E5', '#F59E0B', '#EF4444', '#10B981'];
 export const GSTCompliance = () => {
   const [activeTab, setActiveTab] = useState<'gstr1' | 'gstr3b' | 'itc' | 'rcm'>('gstr1');
   const navigate = useNavigate();
-  const { addCrossFilter, activeFilters } = useCrossFilter();
+  const { toggleCrossFilter, activeFilters, isFiltered } = useCrossFilter();
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
     x: number;
@@ -83,18 +83,15 @@ export const GSTCompliance = () => {
     setContextMenu(prev => ({ ...prev, visible: false }));
   };
 
-  const handleChartClick = (data: any, dimension: string, detailPage: string = '/detail/gst') => {
-    if (data && data.activePayload && data.activePayload[0]) {
+  const handleChartSelect = (data: any, dimension: string) => {
+    if (data?.activePayload?.[0]) {
       const payload = data.activePayload[0].payload;
-      const filter = {
-        id: dimension,
-        label: `${dimension}: ${payload[dimension]}`,
-        value: payload[dimension],
-      };
-      // Navigate to detail page with drill-through context
-      handleDrillThrough(detailPage, filter);
+      const val = payload[dimension] || payload.name || payload.category;
+      if (val) toggleCrossFilter({ id: dimension, label: `${dimension}: ${val}`, value: val });
     }
   };
+
+  const hasFilter = (dimension: string) => activeFilters.some(f => f.id === dimension);
 
   const handleDrillThrough = (page: string, filter?: any) => {
     navigate(page, {
@@ -200,7 +197,7 @@ export const GSTCompliance = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <ComposedChart
                   data={filteredGSTR1}
-                  onClick={(data) => handleChartClick(data, 'month')}
+                  onClick={(data) => handleChartSelect(data, 'month')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} />
@@ -234,7 +231,7 @@ export const GSTCompliance = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={effectiveByRate}
-                  onClick={(data) => handleChartClick(data, 'rate')}
+                  onClick={(data) => handleChartSelect(data, 'rate')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="rate" tick={{ fontSize: 12 }} />
@@ -275,13 +272,13 @@ export const GSTCompliance = () => {
                     <tr
                       key={item.month}
                       onClick={() => {
-                        addCrossFilter({
+                        toggleCrossFilter({
                           id: 'month',
                           label: `Month: ${item.month}`,
                           value: item.month,
                         });
                       }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('month') && isFiltered('month', item.month) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
                       <td className="py-2 px-2 text-right text-gray-900">
@@ -317,7 +314,7 @@ export const GSTCompliance = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <LineChart
                   data={filteredGSTR3B}
-                  onClick={(data) => handleChartClick(data, 'month')}
+                  onClick={(data) => handleChartSelect(data, 'month')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} />
@@ -413,13 +410,13 @@ export const GSTCompliance = () => {
                     <tr
                       key={item.month}
                       onClick={() => {
-                        addCrossFilter({
+                        toggleCrossFilter({
                           id: 'month',
                           label: `Month: ${item.month}`,
                           value: item.month,
                         });
                       }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('month') && isFiltered('month', item.month) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
                       <td className="py-2 px-2 text-right text-gray-900">
@@ -479,7 +476,7 @@ export const GSTCompliance = () => {
                       `${category} ${(percent * 100).toFixed(0)}%`
                     }
                     onClick={(entry) => {
-                      addCrossFilter({
+                      toggleCrossFilter({
                         id: 'itcCategory',
                         label: `ITC: ${entry.category}`,
                         value: entry.category,
@@ -508,7 +505,7 @@ export const GSTCompliance = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={effectiveItc}
-                  onClick={(data) => handleChartClick(data, 'category')}
+                  onClick={(data) => handleChartSelect(data, 'category')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="category" tick={{ fontSize: 12 }} angle={-15} textAnchor="end" height={80} />
@@ -549,13 +546,13 @@ export const GSTCompliance = () => {
                     <tr
                       key={item.category}
                       onClick={() => {
-                        addCrossFilter({
+                        toggleCrossFilter({
                           id: 'itcCategory',
                           label: `ITC: ${item.category}`,
                           value: item.category,
                         });
                       }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('itcCategory') && isFiltered('itcCategory', item.category) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
                       <td className="py-2 px-2 text-right text-gray-900 font-semibold">
@@ -610,7 +607,7 @@ export const GSTCompliance = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={effectiveRcm}
-                  onClick={(data) => handleChartClick(data, 'supplier')}
+                  onClick={(data) => handleChartSelect(data, 'supplier')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis
@@ -653,7 +650,7 @@ export const GSTCompliance = () => {
                       `${supplier.split(' ')[0]} ${(percent * 100).toFixed(0)}%`
                     }
                     onClick={(entry) => {
-                      addCrossFilter({
+                      toggleCrossFilter({
                         id: 'rcmSupplier',
                         label: `Supplier: ${entry.supplier}`,
                         value: entry.supplier,
@@ -694,13 +691,13 @@ export const GSTCompliance = () => {
                     <tr
                       key={item.supplier}
                       onClick={() => {
-                        addCrossFilter({
+                        toggleCrossFilter({
                           id: 'rcmSupplier',
                           label: `Supplier: ${item.supplier}`,
                           value: item.supplier,
                         });
                       }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('rcmSupplier') && isFiltered('rcmSupplier', item.supplier) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.supplier}</td>
                       <td className="py-2 px-2 text-right text-gray-900">

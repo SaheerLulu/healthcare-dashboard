@@ -2,19 +2,17 @@ import { useState, useRef, useEffect } from 'react';
 import { Bell, Search, ChevronDown, MapPin, LogOut, Settings, User } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { useFilters } from '../contexts/FilterContext';
-
-const LOCATIONS = [
-  { id: '', name: 'All Locations' },
-  { id: '1', name: 'Main Store - Delhi' },
-  { id: '2', name: 'Branch - Mumbai' },
-  { id: '3', name: 'Branch - Bangalore' },
-  { id: '4', name: 'Warehouse - Noida' },
-  { id: '5', name: 'Branch - Chennai' },
-];
+import { useApiData } from '../hooks/useApiData';
 
 export const TopBar = () => {
   const navigate = useNavigate();
   const { filters, updateFilters } = useFilters();
+  const { data: filterOptions } = useApiData<{ locations: Array<{ id: string; name: string }> }>(
+    '/executive/filter-options/',
+    { locations: [] },
+    { noFilters: true }
+  );
+  const LOCATIONS = [{ id: '', name: 'All Locations' }, ...filterOptions.locations];
   const [locationOpen, setLocationOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const locationRef = useRef<HTMLDivElement>(null);

@@ -334,16 +334,16 @@ def batch_detail(request):
     f = parse_filters(request)
     if 'location_id' in f:
         qs = qs.filter(location_id=f['location_id'])
-
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs.order_by('days_to_expiry'), request)
-    data = list(page.values(
+    qs = qs.order_by('days_to_expiry').values(
         'product_name', 'product_category', 'batch_no',
         'expiry_month', 'days_to_expiry', 'expiry_status',
         'qty_on_hand', 'purchase_rate', 'mrp',
         'stock_value_cost', 'location_name',
-    )) if page else []
-    return paginator.get_paginated_response(data)
+    )
+
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    return paginator.get_paginated_response(list(page) if page else [])
 
 
 @api_view(['GET'])
@@ -374,14 +374,24 @@ def detail_view(request):
     f = parse_filters(request)
     if 'location_id' in f:
         qs = qs.filter(location_id=f['location_id'])
-
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    data = list(page.values(
+    elif 'location_ids' in f:
+        qs = qs.filter(location_id__in=f['location_ids'])
+    # Support drill-through filters from Executive Summary
+    params = request.query_params
+    if params.get('reorder_needed'):
+        qs = qs.filter(reorder_needed=True)
+    if params.get('expiry_status'):
+        qs = qs.filter(expiry_status=params['expiry_status'])
+    if params.get('movement_status'):
+        qs = qs.filter(movement_status=params['movement_status'])
+    qs = qs.values(
         'product_name', 'product_code', 'product_category',
         'batch_no', 'expiry_month', 'expiry_status',
         'qty_on_hand', 'purchase_rate', 'mrp',
         'stock_value_cost', 'movement_status', 'abc_class',
         'days_of_stock', 'location_name',
-    )) if page else []
-    return paginator.get_paginated_response(data)
+    )
+
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    return paginator.get_paginated_response(list(page) if page else [])

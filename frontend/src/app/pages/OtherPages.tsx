@@ -33,7 +33,7 @@ const COLORS = ['#0D9488', '#4F46E5', '#F59E0B', '#EF4444', '#10B981'];
 export const TDSTracker = () => {
   const [activeTab, setActiveTab] = useState<'deduction' | 'challan' | 'section'>('deduction');
   const navigate = useNavigate();
-  const { addCrossFilter, activeFilters } = useCrossFilter();
+  const { toggleCrossFilter, activeFilters, isFiltered } = useCrossFilter();
   const { data: apiTdsOverview } = useApiData<any>('/tds/overview/', {});
   const { data: apiTdsTrend } = useApiData<any[]>('/tds/trend/', []);
   const { data: apiTdsChallans } = useApiData<any[]>('/tds/challans/', []);
@@ -49,16 +49,15 @@ export const TDSTracker = () => {
     { id: 'section', label: 'Section-wise Analysis' },
   ];
 
-  const handleChartClick = (data: any, dimension: string) => {
-    if (data && data.activePayload && data.activePayload[0]) {
+  const handleChartSelect = (data: any, dimension: string) => {
+    if (data?.activePayload?.[0]) {
       const payload = data.activePayload[0].payload;
-      addCrossFilter({
-        id: dimension,
-        label: `${dimension}: ${payload[dimension]}`,
-        value: payload[dimension],
-      });
+      const val = payload[dimension] || payload.name;
+      if (val) toggleCrossFilter({ id: dimension, label: `${dimension}: ${val}`, value: val });
     }
   };
+
+  const hasFilter = (dimension: string) => activeFilters.some(f => f.id === dimension);
 
   const filteredTDSData = tdsDeductionData.filter(item =>
     !activeFilters.length || activeFilters.some(f => f.value === item.month)
@@ -137,7 +136,7 @@ export const TDSTracker = () => {
             <ChartCard title="TDS Deduction Trend">
               <div onContextMenu={(e) => handleChartRightClick(e, '/detail/tds')} className="cursor-context-menu">
               <ResponsiveContainer width="100%" height={300}>
-                <ComposedChart data={filteredTDSData} onClick={(data) => handleChartClick(data, 'month')}>
+                <ComposedChart data={filteredTDSData} onClick={(data) => handleChartSelect(data, 'month')}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                   <YAxis tick={{ fontSize: 12 }} tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}K`} />
@@ -278,7 +277,7 @@ export const TDSTracker = () => {
 
 export const WorkingCapital = () => {
   const navigate = useNavigate();
-  const { addCrossFilter, activeFilters } = useCrossFilter();
+  const { toggleCrossFilter, activeFilters, isFiltered } = useCrossFilter();
   const { data: apiWcOverview } = useApiData<any>('/working-capital/overview/', {});
   const { data: apiReceivables } = useApiData<any>('/working-capital/receivables/', {});
   const { data: apiPayables } = useApiData<any>('/working-capital/payables/', {});
@@ -399,7 +398,7 @@ export const WorkingCapital = () => {
 
 export const LocationBenchmarking = () => {
   const navigate = useNavigate();
-  const { addCrossFilter, activeFilters } = useCrossFilter();
+  const { toggleCrossFilter, activeFilters, isFiltered } = useCrossFilter();
   const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; page: string }>({ visible: false, x: 0, y: 0, page: '' });
   const handleChartRightClick = (e: MouseEvent, page: string) => { e.preventDefault(); setContextMenu({ visible: true, x: e.clientX, y: e.clientY, page }); };
   const closeContextMenu = () => setContextMenu(prev => ({ ...prev, visible: false }));
@@ -750,7 +749,13 @@ export const LoyaltyAnalytics = () => {
   const { data: apiLoyaltyTiers } = useApiData<any[]>('/loyalty/tiers/', []);
   const { data: apiRedemption } = useApiData<any[]>('/loyalty/redemption/', []);
 
-  const loyaltyTiers = apiLoyaltyTiers.map(numericize);
+  const loyaltyTiers = apiLoyaltyTiers.map((r: any) => ({
+    tier: r.customer_type || r.tier || 'Unknown',
+    members: Number(r.members) || 0,
+    revenue: Number(r.revenue) || 0,
+    orders: Number(r.orders) || 0,
+    avgSpend: Number(r.avg_order_value || r.avgSpend) || 0,
+  }));
   const loyaltyRedemption = apiRedemption.map(numericize);
 
   return (
@@ -821,19 +826,19 @@ export const LoyaltyAnalytics = () => {
               <tr className="border-b border-gray-200">
                 <th className="text-left py-2 px-2 font-medium text-gray-600">Tier</th>
                 <th className="text-right py-2 px-2 font-medium text-gray-600">Members</th>
+                <th className="text-right py-2 px-2 font-medium text-gray-600">Orders</th>
                 <th className="text-right py-2 px-2 font-medium text-gray-600">Revenue</th>
-                <th className="text-right py-2 px-2 font-medium text-gray-600">Avg Spend</th>
-                <th className="text-right py-2 px-2 font-medium text-gray-600">Redemption %</th>
+                <th className="text-right py-2 px-2 font-medium text-gray-600">Avg Order</th>
               </tr>
             </thead>
             <tbody>
               {loyaltyTiers.map((tier) => (
                 <tr key={tier.tier} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors">
                   <td className="py-2 px-2 font-medium text-gray-900">{tier.tier}</td>
-                  <td className="py-2 px-2 text-right text-gray-900">{tier.members.toLocaleString('en-IN')}</td>
-                  <td className="py-2 px-2 text-right text-gray-900">₹{(tier.revenue / 100000).toFixed(2)}L</td>
-                  <td className="py-2 px-2 text-right text-gray-900">₹{tier.avgSpend.toLocaleString('en-IN')}</td>
-                  <td className="py-2 px-2 text-right text-green-600 font-medium">{tier.redemption.toFixed(1)}%</td>
+                  <td className="py-2 px-2 text-right text-gray-900">{tier.members}</td>
+                  <td className="py-2 px-2 text-right text-gray-900">{tier.orders}</td>
+                  <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(tier.revenue)}</td>
+                  <td className="py-2 px-2 text-right text-gray-600">{formatIndianCurrencyAbbreviated(tier.avgSpend)}</td>
                 </tr>
               ))}
             </tbody>

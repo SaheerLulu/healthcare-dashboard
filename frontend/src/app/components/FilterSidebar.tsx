@@ -1,15 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { useLocation } from 'react-router';
-import { Filter, ChevronDown, ChevronRight, X, Layers, Check } from 'lucide-react';
+import { Filter, ChevronDown, ChevronRight, ChevronLeft, X, Layers, Check } from 'lucide-react';
 import { FilterPanel } from './FilterPanel';
 import { useCrossFilter } from '../contexts/CrossFilterContext';
 
 // Page-specific filters configuration
 const pageSpecificFilters: Record<string, Array<{ label: string; options: string[] }>> = {
-  '/': [
-    { label: 'Time Period', options: ['Today', 'This Week', 'This Month', 'This Quarter', 'This Year'] },
-    { label: 'Store Performance', options: ['All Stores', 'Top Performers', 'Bottom Performers'] },
-  ],
   '/sales': [
     { label: 'Sales Channel', options: ['All', 'POS (Retail)', 'B2B (Wholesale)', 'Online'] },
     { label: 'Sales Type', options: ['All', 'Cash', 'Credit', 'Card', 'UPI'] },
@@ -124,7 +120,12 @@ const CustomDropdown = ({ label, options, value, onChange }: {
   );
 };
 
-export const FilterSidebar = () => {
+interface FilterSidebarProps {
+  isOpen: boolean;
+  onToggle: () => void;
+}
+
+export const FilterSidebar = ({ isOpen, onToggle }: FilterSidebarProps) => {
   const location = useLocation();
   const [isGlobalOpen, setIsGlobalOpen] = useState(true);
   const [isPageOpen, setIsPageOpen] = useState(true);
@@ -138,7 +139,22 @@ export const FilterSidebar = () => {
   };
 
   return (
-    <aside className="fixed left-0 top-[128px] h-[calc(100vh-128px)] w-[280px] bg-white border-r border-gray-200 flex flex-col overflow-hidden shadow-sm">
+    <>
+    {/* Toggle tab — always visible, sticks to sidebar edge */}
+    <button
+      onClick={onToggle}
+      className={`fixed top-[140px] z-30 bg-white border border-gray-200 rounded-r-lg shadow-sm p-1.5 transition-[left] duration-300 ease-in-out hover:bg-gray-50 ${
+        isOpen ? 'left-[280px]' : 'left-0'
+      }`}
+      title={isOpen ? 'Hide filters' : 'Show filters'}
+    >
+      {isOpen
+        ? <ChevronLeft className="w-4 h-4 text-gray-600" />
+        : <ChevronRight className="w-4 h-4 text-gray-600" />
+      }
+    </button>
+
+    <aside className={`fixed left-0 top-[128px] h-[calc(100vh-128px)] w-[280px] bg-white border-r border-gray-200 flex flex-col overflow-hidden shadow-sm transition-transform duration-300 ease-in-out ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
       <div className="flex-1 overflow-y-auto">
         {/* Global Filters Section */}
         <div>
@@ -227,25 +243,8 @@ export const FilterSidebar = () => {
           </div>
         )}
 
-        {/* Filter Instructions */}
-        <div className="px-6 py-4 text-xs text-gray-500 border-t border-gray-200 mt-4 bg-gray-50">
-          <p className="mb-2 font-medium text-gray-700">Filter Tips:</p>
-          <ul className="space-y-1.5">
-            <li className="flex items-start gap-2">
-              <span className="text-teal-600 font-bold mt-0.5">-</span>
-              <span>Select multiple filters to narrow results</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-teal-600 font-bold mt-0.5">-</span>
-              <span>Right-click charts for drill-through</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-teal-600 font-bold mt-0.5">-</span>
-              <span>Click chart elements for quick filtering</span>
-            </li>
-          </ul>
-        </div>
       </div>
     </aside>
+    </>
   );
 };

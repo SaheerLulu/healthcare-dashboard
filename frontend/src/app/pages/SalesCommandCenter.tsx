@@ -35,11 +35,12 @@ import { toMonthlyTrend, toTopProducts, toPaymentMix, toHourlySales, toCustomers
 import { formatIndianCurrencyAbbreviated } from '../utils/formatters';
 
 const COLORS = ['#0D9488', '#4F46E5', '#F59E0B', '#EF4444', '#10B981', '#8B5CF6', '#EC4899'];
+const TEAL = '#0D9488';
 
 export const SalesCommandCenter = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'product' | 'customer' | 'doctor' | 'returns'>('overview');
   const navigate = useNavigate();
-  const { addCrossFilter, activeFilters } = useCrossFilter();
+  const { toggleCrossFilter, activeFilters, isFiltered } = useCrossFilter();
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
     x: number;
@@ -85,44 +86,93 @@ export const SalesCommandCenter = () => {
   const categoryRevenueData = toCategoryPie(apiCategories);
   const topCustomersData = toCustomers(apiCustomers);
   const topDoctorsData = toDoctors(apiDoctors);
-  const customerSegmentationData = apiCustomerSegments;
-  const customerGrowthData = apiCustomerGrowth;
-  const outstandingAgingData = apiOutstandingAging;
-  const specialityRevenueData = apiDoctorSpecialties;
-  const doctorPrescriptionTrendData = apiDoctorPrescriptionTrend;
+  // Customer segmentation: API returns { customer_type, count, revenue }
+  const totalSegRevenue = (apiCustomerSegments || []).reduce((s: number, r: any) => s + (Number(r.revenue) || 0), 0);
+  const customerSegmentationData = (apiCustomerSegments || []).map((r: any) => ({
+    segment: r.customer_type || 'Unknown',
+    customers: Number(r.count) || 0,
+    revenue: Number(r.revenue) || 0,
+    share: totalSegRevenue ? Math.round((Number(r.revenue) || 0) / totalSegRevenue * 100) : 0,
+  }));
+
+  // Customer growth: API returns { sale_month, total_customers, revenue, orders }
+  const customerGrowthData = (apiCustomerGrowth || []).map((r: any) => ({
+    month: r.sale_month?.split('-')[1] ? (['', 'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(r.sale_month.split('-')[1])] || r.sale_month) : r.sale_month,
+    newCustomers: Number(r.total_customers) || 0,
+    b2bRevenue: Number(r.revenue) || 0,
+    orders: Number(r.orders) || 0,
+  }));
+
+  // Outstanding aging: API returns { total_outstanding, by_customer: [...] }
+  const outstandingAgingData = (apiOutstandingAging?.by_customer || []).map((r: any) => ({
+    range: r.party_name || 'Unknown',
+    amount: Number(r.outstanding) || 0,
+  }));
+
+  // Doctor-related data
+  const specialityRevenueData = (apiDoctorSpecialties || []).map((r: any) => ({
+    speciality: r.doctor_specialization || 'Unknown',
+    revenue: Number(r.revenue) || 0,
+    prescriptions: Number(r.prescriptions) || 0,
+  }));
+  const doctorPrescriptionTrendData = (apiDoctorPrescriptionTrend || []).map((r: any) => ({
+    month: r.sale_month?.split('-')[1] ? (['', 'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(r.sale_month.split('-')[1])] || r.sale_month) : r.sale_month,
+    totalRx: Number(r.prescriptions) || 0,
+    uniqueDoctors: Number(r.doctors) || 0,
+    revenue: Number(r.revenue) || 0,
+  }));
   const doctorRadarData = apiDoctorRadar;
-  const productProfitabilityData = apiProductProfitability;
-  const slowMovingProductsData = apiSlowMovers;
-  const returnsTrendData = apiReturns.trend || [];
-  const returnsByReasonData = apiReturns.by_reason || [];
-  const returnsByCategoryData = apiReturnsByCategory;
+  const productProfitabilityData = (apiProductProfitability || []).map((r: any) => ({
+    name: r.product_name || '',
+    revenue: Number(r.revenue) || 0,
+    margin: Number(r.margin_pct) || 0,
+    qty: Number(r.qty) || 0,
+    category: r.product_category || '',
+  }));
+  const slowMovingProductsData = (apiSlowMovers || []).map((r: any) => ({
+    name: r.product_name || '',
+    category: r.product_category || '',
+    revenue: Number(r.revenue) || 0,
+    qty: Number(r.qty) || 0,
+  }));
+  const returnsTrendData = (apiReturns.trend || []).map((r: any) => ({
+    month: r.return_month || '',
+    value: Number(r.value) || 0,
+    count: Number(r.count) || 0,
+    rate: 0,
+  }));
+  const returnsByReasonData = (apiReturns.by_reason || []).map((r: any) => ({
+    reason: r.reason || 'Unknown',
+    value: Number(r.value) || 0,
+    count: Number(r.count) || 0,
+  }));
+  const returnsByCategoryData = (apiReturnsByCategory || []).map((r: any) => ({
+    category: r.product_category || 'Unknown',
+    value: Number(r.value) || 0,
+    count: Number(r.count) || 0,
+    qty: Number(r.qty) || 0,
+    rate: 0,
+  }));
   const returnImpactData = apiReturnImpact;
 
-  const handleChartClick = (data: any, dimension: string, detailPage: string = '/detail/sales') => {
+  // Left-click: toggle cross-filter (select/deselect)
+  const handleChartSelect = (data: any, dimension: string) => {
     if (data && data.activePayload && data.activePayload[0]) {
       const payload = data.activePayload[0].payload;
-      const filter = {
-        id: dimension,
-        label: `${dimension}: ${payload[dimension]}`,
-        value: payload[dimension],
-      };
-      handleDrillThrough(detailPage, filter);
+      const val = payload[dimension] || payload.name || payload.category;
+      if (val) {
+        toggleCrossFilter({ id: dimension, label: `${dimension}: ${val}`, value: val });
+      }
     }
   };
 
+  // Right-click: context menu for drill-through
   const handleChartRightClick = (e: MouseEvent, page: string) => {
     e.preventDefault();
-    setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      page,
-    });
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, page });
   };
 
-  const closeContextMenu = () => {
-    setContextMenu(prev => ({ ...prev, visible: false }));
-  };
+  const closeContextMenu = () => setContextMenu(prev => ({ ...prev, visible: false }));
 
   const handleDrillThrough = (page: string, filter?: any) => {
     navigate(page, {
@@ -134,6 +184,8 @@ export const SalesCommandCenter = () => {
       },
     });
   };
+
+  const hasFilter = (dimension: string) => activeFilters.some(f => f.id === dimension);
 
   const tabs = [
     { id: 'overview', label: 'Overview' },
@@ -297,7 +349,7 @@ export const SalesCommandCenter = () => {
                       innerRadius={60} outerRadius={100}
                       paddingAngle={5} dataKey="value"
                       label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                      onClick={(entry) => addCrossFilter({ id: 'paymentMethod', label: `Payment: ${entry.name}`, value: entry.name })}
+                      onClick={(entry) => toggleCrossFilter({ id: 'paymentMethod', label: `Payment: ${entry.name}`, value: entry.name })}
                     >
                       {paymentMethodDataLive.map((_, index) => (
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} cursor="pointer" />
@@ -329,7 +381,7 @@ export const SalesCommandCenter = () => {
             <ChartCard title="Monthly Revenue & Profit Trend">
               <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
                 <ResponsiveContainer width="100%" height={280}>
-                  <ComposedChart data={filteredMonthlySales} onClick={(data) => handleChartClick(data, 'month')}>
+                  <ComposedChart data={filteredMonthlySales} onClick={(data) => handleChartSelect(data,'month')}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                     <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
@@ -363,12 +415,12 @@ export const SalesCommandCenter = () => {
                     {topProductsData.slice(0, 10).map((product) => (
                       <tr
                         key={product.name}
-                        onClick={() => addCrossFilter({ id: 'product', label: `Product: ${product.name}`, value: product.name })}
-                        className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                        onClick={() => toggleCrossFilter({ id: 'product', label: `Product: ${product.name}`, value: product.name })}
+                        className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('product') && isFiltered('product', product.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{product.name}</td>
                         <td className="py-2 px-2 text-right text-gray-600">{product.qty.toLocaleString('en-IN')}</td>
-                        <td className="py-2 px-2 text-right text-gray-900">₹{(product.revenue / 1000).toFixed(1)}K</td>
+                        <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(product.revenue)}</td>
                         <td className="py-2 px-2 text-right">
                           <span className={product.margin >= 20 ? 'text-green-600 font-medium' : product.margin >= 17 ? 'text-amber-600 font-medium' : 'text-red-600 font-medium'}>
                             {product.margin}%
@@ -397,12 +449,12 @@ export const SalesCommandCenter = () => {
                     {topCustomersData.map((customer) => (
                       <tr
                         key={customer.name}
-                        onClick={() => addCrossFilter({ id: 'customer', label: `Customer: ${customer.name}`, value: customer.name })}
-                        className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                        onClick={() => toggleCrossFilter({ id: 'customer', label: `Customer: ${customer.name}`, value: customer.name })}
+                        className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('customer') && isFiltered('customer', customer.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{customer.name}</td>
                         <td className="py-2 px-2 text-right text-gray-600">{customer.orders}</td>
-                        <td className="py-2 px-2 text-right text-gray-900">₹{(customer.revenue / 1000).toFixed(0)}K</td>
+                        <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(customer.revenue)}</td>
                         <td className="py-2 px-2 text-right">
                           {customer.outstanding > 0 ? (
                             <span className="text-red-600">₹{(customer.outstanding / 1000).toFixed(0)}K</span>
@@ -437,7 +489,7 @@ export const SalesCommandCenter = () => {
             <ChartCard title="Revenue by Category" onDrillThrough={() => handleDrillThrough('/detail/product')}>
               <div onContextMenu={(e) => handleChartRightClick(e, '/detail/product')} className="cursor-context-menu">
                 <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={categoryRevenueData} onClick={(data) => handleChartClick(data, 'category', '/detail/product')}>
+                  <ComposedChart data={categoryRevenueData} onClick={(data) => handleChartSelect(data,'category', '/detail/product')}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="category" tick={{ fontSize: 11 }} />
                     <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
@@ -518,8 +570,8 @@ export const SalesCommandCenter = () => {
                   {topProductsData.map((product, index) => (
                     <tr
                       key={product.name}
-                      onClick={() => addCrossFilter({ id: 'product', label: `Product: ${product.name}`, value: product.name })}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      onClick={() => toggleCrossFilter({ id: 'product', label: `Product: ${product.name}`, value: product.name })}
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('product') && isFiltered('product', product.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 text-gray-500">{index + 1}</td>
                       <td className="py-2 px-2 font-medium text-gray-900">{product.name}</td>
@@ -567,8 +619,8 @@ export const SalesCommandCenter = () => {
                   {slowMovingProductsData.map((product: any) => (
                     <tr
                       key={product.name}
-                      onClick={() => addCrossFilter({ id: 'product', label: `Product: ${product.name}`, value: product.name })}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      onClick={() => toggleCrossFilter({ id: 'product', label: `Product: ${product.name}`, value: product.name })}
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('product') && isFiltered('product', product.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{product.name}</td>
                       <td className="py-2 px-2 text-right text-red-600">{product.qty}</td>
@@ -598,11 +650,11 @@ export const SalesCommandCenter = () => {
         <>
           {/* Customer KPIs */}
           <div className="grid grid-cols-5 gap-4 mb-6">
-            <KPICard title="Active Customers" value={String(kpis.active_customers ?? 0)} subtitle="B2B & Walk-in combined" trend={{ value: String(kpis.active_customers_change ?? 0), direction: (kpis.active_customers_change ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="New Customers" value={String(kpis.new_customers ?? 0)} subtitle="This Month" trend={{ value: String(kpis.new_customers_change ?? 0), direction: (kpis.new_customers_change ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Customer Retention" value={`${kpis.customer_retention_pct ?? 0}%`} subtitle="Last 6 months" trend={{ value: `${kpis.retention_change_pp ?? 0}pp`, direction: (kpis.retention_change_pp ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Outstanding Receivables" value={formatIndianCurrencyAbbreviated(kpis.outstanding_receivables || 0)} subtitle={`${kpis.outstanding_customer_count ?? 0} Customers`} trend={{ value: `${kpis.outstanding_growth_pct ?? 0}%`, direction: (kpis.outstanding_growth_pct ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Avg Customer LTV" value={formatIndianCurrencyAbbreviated(kpis.avg_customer_ltv || 0)} subtitle="Per active customer" trend={{ value: `${kpis.ltv_growth_pct ?? 0}%`, direction: (kpis.ltv_growth_pct ?? 0) >= 0 ? 'up' : 'down' }} />
+            <KPICard title="Total Customers" value={String(topCustomersData.length)} subtitle="In selected period" />
+            <KPICard title="Customer Segments" value={String(customerSegmentationData.length)} subtitle="Unique types" />
+            <KPICard title="Top Customer Revenue" value={formatIndianCurrencyAbbreviated(topCustomersData[0]?.revenue || 0)} subtitle={topCustomersData[0]?.name || '-'} />
+            <KPICard title="Outstanding" value={formatIndianCurrencyAbbreviated(apiOutstandingAging?.total_outstanding || 0)} subtitle={`${(apiOutstandingAging?.by_customer || []).length} parties`} />
+            <KPICard title="Avg Order Value" value={formatIndianCurrencyAbbreviated(kpis.avg_order_value || 0)} subtitle="Across all customers" />
           </div>
 
           {/* Charts */}
@@ -617,7 +669,7 @@ export const SalesCommandCenter = () => {
                       innerRadius={60} outerRadius={100}
                       paddingAngle={5} dataKey="revenue"
                       label={({ segment, share }) => `${(segment || '').split(' ')[0]} ${share ?? 0}%`}
-                      onClick={(entry) => addCrossFilter({ id: 'segment', label: `Segment: ${entry.segment}`, value: entry.segment })}
+                      onClick={(entry) => toggleCrossFilter({ id: 'segment', label: `Segment: ${entry.segment}`, value: entry.segment })}
                     >
                       {customerSegmentationData.map((_: any, index: number) => (
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} cursor="pointer" />
@@ -632,15 +684,14 @@ export const SalesCommandCenter = () => {
             <ChartCard title="Customer Growth & B2B Revenue Trend">
               <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
                 <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={customerGrowthData} onClick={(data) => handleChartClick(data, 'month')}>
+                  <ComposedChart data={customerGrowthData} onClick={(data) => handleChartSelect(data,'month')}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                     <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
                     <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
                     <Tooltip formatter={(value: any, name: string) => name === 'B2B Revenue' ? `₹${(value / 100000).toFixed(2)}L` : value} />
                     <Legend />
-                    <Bar yAxisId="left" dataKey="newCustomers" fill="#10B981" name="New Customers" />
-                    <Bar yAxisId="left" dataKey="churnedCustomers" fill="#EF4444" name="Churned" />
+                    <Bar yAxisId="left" dataKey="newCustomers" fill="#10B981" name="Customers" cursor="pointer" />
                     <Line yAxisId="right" type="monotone" dataKey="b2bRevenue" stroke="#0D9488" strokeWidth={2} name="B2B Revenue" dot={{ fill: '#0D9488', r: 4 }} />
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -653,7 +704,7 @@ export const SalesCommandCenter = () => {
             <ChartCard title="Outstanding Receivables Aging">
               <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
                 <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={outstandingAgingData} onClick={(data) => handleChartClick(data, 'range')}>
+                  <BarChart data={outstandingAgingData} onClick={(data) => handleChartSelect(data,'range')}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="range" tick={{ fontSize: 11 }} />
                     <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
@@ -678,26 +729,20 @@ export const SalesCommandCenter = () => {
                       <th className="text-left py-2 px-2 font-medium text-gray-600">Segment</th>
                       <th className="text-right py-2 px-2 font-medium text-gray-600">Customers</th>
                       <th className="text-right py-2 px-2 font-medium text-gray-600">Revenue</th>
-                      <th className="text-right py-2 px-2 font-medium text-gray-600">Avg Orders</th>
-                      <th className="text-right py-2 px-2 font-medium text-gray-600">Retention</th>
+                      <th className="text-right py-2 px-2 font-medium text-gray-600">Share</th>
                     </tr>
                   </thead>
                   <tbody>
                     {customerSegmentationData.map((seg: any) => (
                       <tr
                         key={seg.segment}
-                        onClick={() => addCrossFilter({ id: 'segment', label: `Segment: ${seg.segment}`, value: seg.segment })}
-                        className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                        onClick={() => toggleCrossFilter({ id: 'segment', label: `Segment: ${seg.segment}`, value: seg.segment })}
+                        className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('segment') && isFiltered('segment', seg.segment) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{seg.segment}</td>
                         <td className="py-2 px-2 text-right text-gray-900">{seg.customers}</td>
-                        <td className="py-2 px-2 text-right text-gray-900">₹{((seg.revenue || 0) / 100000).toFixed(2)}L</td>
-                        <td className="py-2 px-2 text-right text-gray-600">{seg.avgOrders}</td>
-                        <td className="py-2 px-2 text-right">
-                          <span className={(seg.retention ?? 0) >= 90 ? 'text-green-600 font-medium' : (seg.retention ?? 0) >= 80 ? 'text-amber-600 font-medium' : 'text-red-600 font-medium'}>
-                            {seg.retention}%
-                          </span>
-                        </td>
+                        <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(seg.revenue)}</td>
+                        <td className="py-2 px-2 text-right text-gray-600">{seg.share}%</td>
                       </tr>
                     ))}
                   </tbody>
@@ -714,45 +759,30 @@ export const SalesCommandCenter = () => {
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left py-2 px-2 font-medium text-gray-600">Customer</th>
-                    <th className="text-center py-2 px-2 font-medium text-gray-600">Tier</th>
+                    <th className="text-left py-2 px-2 font-medium text-gray-600">Type</th>
+                    <th className="text-left py-2 px-2 font-medium text-gray-600">City</th>
                     <th className="text-right py-2 px-2 font-medium text-gray-600">Orders</th>
                     <th className="text-right py-2 px-2 font-medium text-gray-600">Revenue</th>
                     <th className="text-right py-2 px-2 font-medium text-gray-600">Avg Order</th>
-                    <th className="text-right py-2 px-2 font-medium text-gray-600">Outstanding</th>
-                    <th className="text-center py-2 px-2 font-medium text-gray-600">Frequency</th>
-                    <th className="text-left py-2 px-2 font-medium text-gray-600">Last Order</th>
                   </tr>
                 </thead>
                 <tbody>
                   {topCustomersData.map((customer) => (
                     <tr
                       key={customer.name}
-                      onClick={() => addCrossFilter({ id: 'customer', label: `Customer: ${customer.name}`, value: customer.name })}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      onClick={() => toggleCrossFilter({ id: 'customer', label: `Customer: ${customer.name}`, value: customer.name })}
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('customer') && isFiltered('customer', customer.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{customer.name}</td>
-                      <td className="py-2 px-2 text-center">
+                      <td className="py-2 px-2 text-gray-600">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${
-                          customer.loyalty === 'Platinum' ? 'bg-purple-100 text-purple-800' :
-                          customer.loyalty === 'Gold' ? 'bg-amber-100 text-amber-800' :
-                          customer.loyalty === 'Silver' ? 'bg-gray-100 text-gray-800' :
-                          'bg-orange-100 text-orange-800'
-                        }`}>
-                          {customer.loyalty || '-'}
-                        </span>
+                          customer.type === 'B2B' ? 'bg-indigo-100 text-indigo-800' : 'bg-teal-100 text-teal-800'
+                        }`}>{customer.type || '-'}</span>
                       </td>
+                      <td className="py-2 px-2 text-gray-600">{customer.city || '-'}</td>
                       <td className="py-2 px-2 text-right text-gray-900">{customer.orders}</td>
-                      <td className="py-2 px-2 text-right text-gray-900">₹{(customer.revenue / 1000).toFixed(0)}K</td>
-                      <td className="py-2 px-2 text-right text-gray-600">₹{(customer.avgOrderValue || 0).toLocaleString('en-IN')}</td>
-                      <td className="py-2 px-2 text-right">
-                        {customer.outstanding > 0 ? (
-                          <span className="text-red-600 font-medium">₹{(customer.outstanding / 1000).toFixed(0)}K</span>
-                        ) : (
-                          <span className="text-green-600">—</span>
-                        )}
-                      </td>
-                      <td className="py-2 px-2 text-center text-gray-600">{customer.frequency || '-'}</td>
-                      <td className="py-2 px-2 text-gray-600">{customer.lastOrder || '-'}</td>
+                      <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(customer.revenue)}</td>
+                      <td className="py-2 px-2 text-right text-gray-600">{formatIndianCurrencyAbbreviated(customer.outstanding)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -767,11 +797,11 @@ export const SalesCommandCenter = () => {
         <>
           {/* Doctor KPIs */}
           <div className="grid grid-cols-5 gap-4 mb-6">
-            <KPICard title="Active Prescribers" value={String(kpis.active_prescribers ?? 0)} subtitle="MTD prescriptions" trend={{ value: String(kpis.prescribers_change ?? 0), direction: (kpis.prescribers_change ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Total Prescriptions" value={String(kpis.total_prescriptions ?? 0)} subtitle="This month" trend={{ value: `${kpis.prescriptions_growth_pct ?? 0}%`, direction: (kpis.prescriptions_growth_pct ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Avg Rx Value" value={formatIndianCurrencyAbbreviated(kpis.avg_rx_value || 0)} subtitle="Per prescription" trend={{ value: `${kpis.avg_rx_growth_pct ?? 0}%`, direction: (kpis.avg_rx_growth_pct ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Top Prescriber" value={kpis.top_prescriber_name || '-'} subtitle={`${kpis.top_prescriber_rx ?? 0} Rx / ${formatIndianCurrencyAbbreviated(kpis.top_prescriber_revenue || 0)}`} trend={{ value: `${kpis.top_prescriber_growth_pct ?? 0}%`, direction: (kpis.top_prescriber_growth_pct ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="New Doctors" value={String(kpis.new_doctors ?? 0)} subtitle="Onboarded this month" trend={{ value: String(kpis.new_doctors_change ?? 0), direction: (kpis.new_doctors_change ?? 0) >= 0 ? 'up' : 'down' }} />
+            <KPICard title="Active Prescribers" value={String(topDoctorsData.length)} subtitle="In selected period" />
+            <KPICard title="Total Prescriptions" value={String(topDoctorsData.reduce((s, d) => s + d.prescriptions, 0))} subtitle="Total Rx count" />
+            <KPICard title="Rx Revenue" value={formatIndianCurrencyAbbreviated(topDoctorsData.reduce((s, d) => s + d.revenue, 0))} subtitle="From prescriptions" />
+            <KPICard title="Top Prescriber" value={topDoctorsData[0]?.name || '-'} subtitle={topDoctorsData[0] ? `${topDoctorsData[0].prescriptions} Rx` : ''} />
+            <KPICard title="Specialities" value={String(specialityRevenueData.length)} subtitle="Active specialities" />
           </div>
 
           {/* Charts */}
@@ -779,7 +809,7 @@ export const SalesCommandCenter = () => {
             <ChartCard title="Revenue by Speciality" onDrillThrough={() => handleDrillThrough('/detail/sales')}>
               <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
                 <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={specialityRevenueData} layout="vertical" onClick={(data) => handleChartClick(data, 'speciality')}>
+                  <BarChart data={specialityRevenueData} layout="vertical" onClick={(data) => handleChartSelect(data,'speciality')}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
                     <YAxis type="category" dataKey="speciality" tick={{ fontSize: 11 }} width={110} />
@@ -817,16 +847,15 @@ export const SalesCommandCenter = () => {
             <ChartCard title="Prescription Volume Trend">
               <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
                 <ResponsiveContainer width="100%" height={280}>
-                  <ComposedChart data={doctorPrescriptionTrendData} onClick={(data) => handleChartClick(data, 'month')}>
+                  <ComposedChart data={doctorPrescriptionTrendData} onClick={(data) => handleChartSelect(data,'month')}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                     <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
                     <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
                     <Tooltip />
                     <Legend />
-                    <Bar yAxisId="left" dataKey="totalRx" fill="#0D9488" name="Total Rx" />
+                    <Bar yAxisId="left" dataKey="totalRx" fill="#0D9488" name="Total Rx" cursor="pointer" />
                     <Line yAxisId="right" type="monotone" dataKey="uniqueDoctors" stroke="#4F46E5" strokeWidth={2} name="Active Doctors" dot={{ fill: '#4F46E5', r: 4 }} />
-                    <Line yAxisId="right" type="monotone" dataKey="newDoctors" stroke="#F59E0B" strokeWidth={2} name="New Doctors" dot={{ fill: '#F59E0B', r: 4 }} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -850,14 +879,14 @@ export const SalesCommandCenter = () => {
                     {specialityRevenueData.map((spec: any) => (
                       <tr
                         key={spec.speciality}
-                        onClick={() => addCrossFilter({ id: 'speciality', label: `Speciality: ${spec.speciality}`, value: spec.speciality })}
-                        className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                        onClick={() => toggleCrossFilter({ id: 'speciality', label: `Speciality: ${spec.speciality}`, value: spec.speciality })}
+                        className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('speciality') && isFiltered('speciality', spec.speciality) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{spec.speciality}</td>
-                        <td className="py-2 px-2 text-right text-gray-600">{spec.doctors}</td>
+                        <td className="py-2 px-2 text-right text-gray-600">-</td>
                         <td className="py-2 px-2 text-right text-gray-900">{spec.prescriptions}</td>
-                        <td className="py-2 px-2 text-right text-gray-900">₹{((spec.revenue || 0) / 100000).toFixed(2)}L</td>
-                        <td className="py-2 px-2 text-right text-gray-600">₹{(spec.avgValue || 0).toLocaleString('en-IN')}</td>
+                        <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(spec.revenue)}</td>
+                        <td className="py-2 px-2 text-right text-gray-600">{spec.prescriptions ? formatIndianCurrencyAbbreviated(spec.revenue / spec.prescriptions) : '-'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -887,21 +916,17 @@ export const SalesCommandCenter = () => {
                   {topDoctorsData.map((doctor, index) => (
                     <tr
                       key={doctor.name}
-                      onClick={() => addCrossFilter({ id: 'doctor', label: `Doctor: ${doctor.name}`, value: doctor.name })}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      onClick={() => toggleCrossFilter({ id: 'doctor', label: `Doctor: ${doctor.name}`, value: doctor.name })}
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('doctor') && isFiltered('doctor', doctor.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 text-gray-500">{index + 1}</td>
                       <td className="py-2 px-2 font-medium text-gray-900">{doctor.name}</td>
                       <td className="py-2 px-2 text-gray-600">{doctor.speciality}</td>
                       <td className="py-2 px-2 text-right text-gray-900">{doctor.prescriptions}</td>
-                      <td className="py-2 px-2 text-right text-gray-900">₹{(doctor.revenue / 1000).toFixed(0)}K</td>
-                      <td className="py-2 px-2 text-right text-gray-600">₹{(doctor.avgRxValue || 0).toLocaleString('en-IN')}</td>
-                      <td className="py-2 px-2 text-gray-600">{doctor.topDrug || '-'}</td>
-                      <td className="py-2 px-2 text-right">
-                        <span className={(doctor.growth ?? 0) >= 0 ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
-                          {(doctor.growth ?? 0) > 0 ? '↑' : '↓'}{Math.abs(doctor.growth ?? 0)}%
-                        </span>
-                      </td>
+                      <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(doctor.revenue)}</td>
+                      <td className="py-2 px-2 text-right text-gray-600">{formatIndianCurrencyAbbreviated(doctor.avgRxValue)}</td>
+                      <td className="py-2 px-2 text-gray-600">-</td>
+                      <td className="py-2 px-2 text-right text-gray-600">-</td>
                     </tr>
                   ))}
                 </tbody>
@@ -916,10 +941,10 @@ export const SalesCommandCenter = () => {
         <>
           {/* Returns KPIs */}
           <div className="grid grid-cols-5 gap-4 mb-6">
-            <KPICard title="Total Returns (MTD)" value={String(returnsKpis.total_returns ?? 0)} subtitle={`${formatIndianCurrencyAbbreviated(returnsKpis.total_return_value || 0)} value`} trend={{ value: String(returnsKpis.returns_change ?? 0), direction: (returnsKpis.returns_change ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Return Rate" value={`${returnsKpis.return_rate_pct ?? 0}%`} subtitle={`Target: <${returnsKpis.return_rate_target_pct ?? 0}%`} trend={{ value: `${returnsKpis.return_rate_change_pp ?? 0}pp`, direction: (returnsKpis.return_rate_change_pp ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Avg Return Value" value={formatIndianCurrencyAbbreviated(returnsKpis.avg_return_value || 0)} subtitle="Per return item" trend={{ value: `${returnsKpis.avg_return_growth_pct ?? 0}%`, direction: (returnsKpis.avg_return_growth_pct ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Top Return Reason" value={returnsKpis.top_reason || '-'} subtitle={`${returnsKpis.top_reason_pct ?? 0}% of returns`} trend={{ value: `${returnsKpis.top_reason_change_pp ?? 0}pp`, direction: (returnsKpis.top_reason_change_pp ?? 0) >= 0 ? 'up' : 'down' }} />
+            <KPICard title="Total Returns" value={String(returnsKpis.total_returns ?? 0)} subtitle={`${formatIndianCurrencyAbbreviated(returnsKpis.total_value || 0)} value`} />
+            <KPICard title="Return Qty" value={String(returnsKpis.total_qty ?? 0)} subtitle="Items returned" />
+            <KPICard title="Return Value" value={formatIndianCurrencyAbbreviated(returnsKpis.total_value || 0)} subtitle="Total return value" />
+            <KPICard title="Top Reason" value={returnsByReasonData[0]?.reason || '-'} subtitle={returnsByReasonData[0] ? `${returnsByReasonData[0].count} returns` : ''} />
             <KPICard title="Net Profit Impact" value={returnsKpis.net_profit_impact ? `-${formatIndianCurrencyAbbreviated(Math.abs(returnsKpis.net_profit_impact))}` : '-'} subtitle={`${returnsKpis.profit_impact_pct ?? 0}% of gross profit`} trend={{ value: formatIndianCurrencyAbbreviated(Math.abs(returnsKpis.profit_impact_change || 0)), direction: (returnsKpis.profit_impact_change ?? 0) >= 0 ? 'up' : 'down' }} />
           </div>
 
@@ -928,7 +953,7 @@ export const SalesCommandCenter = () => {
             <ChartCard title="Returns Trend (Last 6 Months)" onDrillThrough={() => handleDrillThrough('/detail/sales')}>
               <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
                 <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={returnsTrendData} onClick={(data) => handleChartClick(data, 'month')}>
+                  <ComposedChart data={returnsTrendData} onClick={(data) => handleChartSelect(data,'month')}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                     <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
@@ -945,7 +970,7 @@ export const SalesCommandCenter = () => {
             <ChartCard title="Returns by Reason">
               <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
                 <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={returnsByReasonData} layout="vertical" onClick={(data) => handleChartClick(data, 'reason')}>
+                  <BarChart data={returnsByReasonData} layout="vertical" onClick={(data) => handleChartSelect(data,'reason')}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
                     <YAxis type="category" dataKey="reason" tick={{ fontSize: 10 }} width={130} />
@@ -966,7 +991,7 @@ export const SalesCommandCenter = () => {
             <ChartCard title="Return Rate by Category">
               <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
                 <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={returnsByCategoryData} onClick={(data) => handleChartClick(data, 'category')}>
+                  <BarChart data={returnsByCategoryData} onClick={(data) => handleChartSelect(data,'category')}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="category" tick={{ fontSize: 11 }} />
                     <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
@@ -1032,8 +1057,8 @@ export const SalesCommandCenter = () => {
                     {returnsByReasonData.map((item: any) => (
                       <tr
                         key={item.reason}
-                        onClick={() => addCrossFilter({ id: 'returnReason', label: `Reason: ${item.reason}`, value: item.reason })}
-                        className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                        onClick={() => toggleCrossFilter({ id: 'returnReason', label: `Reason: ${item.reason}`, value: item.reason })}
+                        className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('returnReason') && isFiltered('returnReason', item.reason) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{item.reason}</td>
                         <td className="py-2 px-2 text-right text-gray-900">{item.qty}</td>
@@ -1079,8 +1104,8 @@ export const SalesCommandCenter = () => {
                     {returnsByCategoryData.map((item: any) => (
                       <tr
                         key={item.category}
-                        onClick={() => addCrossFilter({ id: 'category', label: `Category: ${item.category}`, value: item.category })}
-                        className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                        onClick={() => toggleCrossFilter({ id: 'category', label: `Category: ${item.category}`, value: item.category })}
+                        className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('category') && isFiltered('category', item.category) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
                         <td className="py-2 px-2 text-right text-gray-900">{item.returns}</td>

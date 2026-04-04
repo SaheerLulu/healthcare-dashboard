@@ -27,6 +27,54 @@ const currentFY = today.getMonth() >= 3
   ? `FY ${today.getFullYear()}-${String(today.getFullYear() + 1).slice(2)}`
   : `FY ${today.getFullYear() - 1}-${String(today.getFullYear()).slice(2)}`;
 
+function computeDateRange(preset: string): { start: string; end: string } {
+  const now = new Date();
+  const t = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+  switch (preset) {
+    case 'Today':
+      return { start: iso(t), end: iso(t) };
+    case 'Yesterday': {
+      const y = new Date(t); y.setDate(y.getDate() - 1);
+      return { start: iso(y), end: iso(y) };
+    }
+    case 'Last 7 Days': {
+      const s = new Date(t); s.setDate(s.getDate() - 6);
+      return { start: iso(s), end: iso(t) };
+    }
+    case 'Last 30 Days': {
+      const s = new Date(t); s.setDate(s.getDate() - 29);
+      return { start: iso(s), end: iso(t) };
+    }
+    case 'This Month':
+      return { start: iso(new Date(t.getFullYear(), t.getMonth(), 1)), end: iso(t) };
+    case 'Last Month': {
+      const first = new Date(t.getFullYear(), t.getMonth() - 1, 1);
+      const last = new Date(t.getFullYear(), t.getMonth(), 0);
+      return { start: iso(first), end: iso(last) };
+    }
+    case 'This Quarter': {
+      // Indian FY quarters: Apr-Jun, Jul-Sep, Oct-Dec, Jan-Mar
+      const m = t.getMonth(); // 0-indexed
+      const qStart = m >= 3 && m <= 5 ? 3 : m >= 6 && m <= 8 ? 6 : m >= 9 && m <= 11 ? 9 : 0;
+      const yr = qStart === 0 ? t.getFullYear() : t.getFullYear();
+      return { start: iso(new Date(yr, qStart, 1)), end: iso(t) };
+    }
+    case 'This FY': {
+      const fyStart = t.getMonth() >= 3
+        ? new Date(t.getFullYear(), 3, 1)
+        : new Date(t.getFullYear() - 1, 3, 1);
+      return { start: iso(fyStart), end: iso(t) };
+    }
+    default: {
+      // 'Last 6 Months' or unknown
+      const s = new Date(t); s.setMonth(s.getMonth() - 6);
+      return { start: iso(s), end: iso(t) };
+    }
+  }
+}
+
 const defaultFilters: GlobalFilters = {
   dateRange: { start: toISO(sixMonthsAgo), end: toISO(today) },
   quickPreset: 'Last 6 Months',
@@ -45,7 +93,16 @@ export const FilterProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [filters, setFilters] = useState<GlobalFilters>(defaultFilters);
 
   const updateFilters = (newFilters: Partial<GlobalFilters>) => {
-    setFilters(prev => ({ ...prev, ...newFilters }));
+    setFilters(prev => {
+      const merged = { ...prev, ...newFilters };
+      if (newFilters.quickPreset && !newFilters.dateRange) {
+        merged.dateRange = computeDateRange(newFilters.quickPreset);
+      }
+      if (newFilters.dateRange && !newFilters.quickPreset) {
+        merged.quickPreset = 'Custom';
+      }
+      return merged;
+    });
   };
 
   const resetFilters = () => {

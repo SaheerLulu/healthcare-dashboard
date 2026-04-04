@@ -33,7 +33,7 @@ const COLORS = ['#0D9488', '#4F46E5', '#F59E0B', '#EF4444', '#10B981'];
 export const ProcurementIntelligence = () => {
   const [activeTab, setActiveTab] = useState<'suppliers' | 'price' | 'leadtime' | 'returns' | 'savings' | 'payment'>('suppliers');
   const navigate = useNavigate();
-  const { addCrossFilter, activeFilters } = useCrossFilter();
+  const { toggleCrossFilter, activeFilters, isFiltered } = useCrossFilter();
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
     x: number;
@@ -90,18 +90,15 @@ export const ProcurementIntelligence = () => {
     setContextMenu(prev => ({ ...prev, visible: false }));
   };
 
-  const handleChartClick = (data: any, dimension: string, detailPage: string = '/detail/purchase') => {
-    if (data && data.activePayload && data.activePayload[0]) {
+  const handleChartSelect = (data: any, dimension: string) => {
+    if (data?.activePayload?.[0]) {
       const payload = data.activePayload[0].payload;
-      const filter = {
-        id: dimension,
-        label: `${dimension}: ${payload[dimension]}`,
-        value: payload[dimension],
-      };
-      // Navigate to detail page with drill-through context
-      handleDrillThrough(detailPage, filter);
+      const val = payload[dimension] || payload.name || payload.category;
+      if (val) toggleCrossFilter({ id: dimension, label: `${dimension}: ${val}`, value: val });
     }
   };
+
+  const hasFilter = (dimension: string) => activeFilters.some(f => f.id === dimension);
 
   const handleDrillThrough = (page: string, filter?: any) => {
     navigate(page, {
@@ -231,7 +228,7 @@ export const ProcurementIntelligence = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <ComposedChart
                   data={filteredSuppliers}
-                  onClick={(data) => handleChartClick(data, 'supplier')}
+                  onClick={(data) => handleChartSelect(data, 'supplier')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis
@@ -291,7 +288,7 @@ export const ProcurementIntelligence = () => {
                       `${status} ${(percent * 100).toFixed(0)}%`
                     }
                     onClick={(entry) => {
-                      addCrossFilter({
+                      toggleCrossFilter({
                         id: 'poStatus',
                         label: `Status: ${entry.status}`,
                         value: entry.status,
@@ -333,13 +330,13 @@ export const ProcurementIntelligence = () => {
                     <tr
                       key={supplier.supplier}
                       onClick={() => {
-                        addCrossFilter({
+                        toggleCrossFilter({
                           id: 'supplier',
                           label: `Supplier: ${supplier.supplier}`,
                           value: supplier.supplier,
                         });
                       }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('supplier') && isFiltered('supplier', supplier.supplier) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{supplier.supplier}</td>
                       <td className="py-2 px-2 text-right text-gray-900">{supplier.orders}</td>
@@ -386,7 +383,7 @@ export const ProcurementIntelligence = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <LineChart
                   data={filteredPriceTrend}
-                  onClick={(data) => handleChartClick(data, 'month')}
+                  onClick={(data) => handleChartSelect(data, 'month')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} />
@@ -439,7 +436,7 @@ export const ProcurementIntelligence = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={filteredPriceTrend}
-                  onClick={(data) => handleChartClick(data, 'month')}
+                  onClick={(data) => handleChartSelect(data, 'month')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} />
@@ -478,13 +475,13 @@ export const ProcurementIntelligence = () => {
                     <tr
                       key={item.month}
                       onClick={() => {
-                        addCrossFilter({
+                        toggleCrossFilter({
                           id: 'month',
                           label: `Month: ${item.month}`,
                           value: item.month,
                         });
                       }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('month') && isFiltered('month', item.month) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
                       <td className="py-2 px-2 text-right text-gray-900">₹{item.avgPrice}</td>
@@ -542,7 +539,7 @@ export const ProcurementIntelligence = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={leadTimeData}
-                  onClick={(data) => handleChartClick(data, 'supplier')}
+                  onClick={(data) => handleChartSelect(data, 'supplier')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="supplier" tick={{ fontSize: 12 }} />
@@ -569,7 +566,7 @@ export const ProcurementIntelligence = () => {
                 <BarChart
                   data={leadTimeData}
                   layout="vertical"
-                  onClick={(data) => handleChartClick(data, 'supplier')}
+                  onClick={(data) => handleChartSelect(data, 'supplier')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis type="number" tick={{ fontSize: 12 }} />
@@ -608,13 +605,13 @@ export const ProcurementIntelligence = () => {
                     <tr
                       key={supplier.supplier}
                       onClick={() => {
-                        addCrossFilter({
+                        toggleCrossFilter({
                           id: 'supplier',
                           label: `Supplier: ${supplier.supplier}`,
                           value: supplier.supplier,
                         });
                       }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('supplier') && isFiltered('supplier', supplier.supplier) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{supplier.supplier}</td>
                       <td className="py-2 px-2 text-right text-green-600">
@@ -662,7 +659,7 @@ export const ProcurementIntelligence = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={purchaseReturns}
-                  onClick={(data) => handleChartClick(data, 'category')}
+                  onClick={(data) => handleChartSelect(data, 'category')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="category" tick={{ fontSize: 12 }} />
@@ -710,7 +707,7 @@ export const ProcurementIntelligence = () => {
                       `${category} ${percent.toFixed(1)}%`
                     }
                     onClick={(entry) => {
-                      addCrossFilter({
+                      toggleCrossFilter({
                         id: 'returnCategory',
                         label: `Return: ${entry.category}`,
                         value: entry.category,
@@ -750,13 +747,13 @@ export const ProcurementIntelligence = () => {
                     <tr
                       key={item.category}
                       onClick={() => {
-                        addCrossFilter({
+                        toggleCrossFilter({
                           id: 'returnCategory',
                           label: `Return: ${item.category}`,
                           value: item.category,
                         });
                       }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('returnCategory') && isFiltered('returnCategory', item.category) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
                       <td className="py-2 px-2 text-right text-gray-900">
@@ -803,7 +800,7 @@ export const ProcurementIntelligence = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={savingsData}
-                  onClick={(data) => handleChartClick(data, 'month')}
+                  onClick={(data) => handleChartSelect(data, 'month')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} />
@@ -830,7 +827,7 @@ export const ProcurementIntelligence = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={supplierCostComparison}
-                  onClick={(data) => handleChartClick(data, 'product')}
+                  onClick={(data) => handleChartSelect(data, 'product')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="product" tick={{ fontSize: 12 }} />
@@ -868,13 +865,13 @@ export const ProcurementIntelligence = () => {
                     <tr
                       key={item.month}
                       onClick={() => {
-                        addCrossFilter({
+                        toggleCrossFilter({
                           id: 'month',
                           label: `Month: ${item.month}`,
                           value: item.month,
                         });
                       }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('month') && isFiltered('month', item.month) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
                       <td className="py-2 px-2 text-right text-gray-900">₹{item.negotiatedSavings}</td>
@@ -902,7 +899,7 @@ export const ProcurementIntelligence = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={paymentTermsData}
-                  onClick={(data) => handleChartClick(data, 'supplier')}
+                  onClick={(data) => handleChartSelect(data, 'supplier')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="supplier" tick={{ fontSize: 12 }} />
@@ -929,7 +926,7 @@ export const ProcurementIntelligence = () => {
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={supplierCostComparison}
-                  onClick={(data) => handleChartClick(data, 'product')}
+                  onClick={(data) => handleChartSelect(data, 'product')}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="product" tick={{ fontSize: 12 }} />
@@ -967,13 +964,13 @@ export const ProcurementIntelligence = () => {
                     <tr
                       key={item.supplier}
                       onClick={() => {
-                        addCrossFilter({
+                        toggleCrossFilter({
                           id: 'supplier',
                           label: `Supplier: ${item.supplier}`,
                           value: item.supplier,
                         });
                       }}
-                      className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('supplier') && isFiltered('supplier', item.supplier) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.supplier}</td>
                       <td className="py-2 px-2 text-right text-gray-900">{item.creditDays}</td>

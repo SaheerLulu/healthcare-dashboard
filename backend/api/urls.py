@@ -1,7 +1,7 @@
 from django.urls import path
 from api import executive, sales, financial, inventory, procurement
 from api import compliance, working_capital, location, product
-from api import dispatch, loyalty, audit
+from api import dispatch, loyalty, audit, pipeline_api
 
 urlpatterns = [
     # ─── Executive Summary ────────────────────────────────────────────
@@ -12,6 +12,8 @@ urlpatterns = [
     path('executive/top-products/', executive.top_products),
     path('executive/inventory-alerts/', executive.inventory_alerts),
     path('executive/pending-actions/', executive.pending_actions),
+    path('executive/today-sales/', executive.today_sales),
+    path('executive/filter-options/', executive.filter_options),
 
     # ─── Sales Command Center ─────────────────────────────────────────
     path('sales/overview/', sales.overview),
@@ -33,6 +35,7 @@ urlpatterns = [
     path('sales/doctor-radar/', sales.doctor_radar),
     path('sales/returns/profit-impact/', sales.returns_profit_impact),
     path('sales/detail/', sales.detail),
+    path('sales/returns/detail/', sales.returns_detail),
 
     # ─── Financial Deep Dive ──────────────────────────────────────────
     path('financial/pnl/', financial.pnl),
@@ -130,4 +133,9 @@ urlpatterns = [
     path('audit/data-freshness/', audit.data_freshness),
     path('audit/user-activity/', audit.user_activity),
     path('audit/detail/', audit.detail),
+
+    # ─── Pipeline Management ─────────────────────────────────────────
+    path('pipeline/trigger/', pipeline_api.trigger_pipeline),
+    path('pipeline/progress/', pipeline_api.pipeline_progress),
+    path('pipeline/history/', pipeline_api.pipeline_history),
 ]

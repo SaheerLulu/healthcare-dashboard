@@ -7,6 +7,8 @@ import { InventoryOperations } from "./pages/InventoryOperations";
 import { ProcurementIntelligence } from "./pages/ProcurementIntelligence";
 import { GSTCompliance } from "./pages/GSTCompliance";
 import { Settings } from "./pages/Settings";
+import { SalesReport } from "./pages/SalesReport";
+import { PurchaseReport } from "./pages/PurchaseReport";
 import {
   TDSTracker,
   WorkingCapital,
@@ -34,6 +36,7 @@ import {
   LoyaltyDetailData,
   AuditDetailData,
   ExpenseDetailData,
+  SalesReturnsDetailData,
 } from "./pages/detail/AdditionalDetailPages";
 
 export const router = createBrowserRouter([
@@ -55,6 +58,8 @@ export const router = createBrowserRouter([
       { path: "loyalty", Component: LoyaltyAnalytics },
       { path: "audit", Component: AuditDataHealth },
       { path: "settings", Component: Settings },
+      { path: "reports/sales", Component: SalesReport },
+      { path: "reports/purchases", Component: PurchaseReport },
       
       // Detail Data Pages
       { path: "detail/sales", Component: SalesDetailData },
@@ -70,6 +75,7 @@ export const router = createBrowserRouter([
       { path: "detail/loyalty", Component: LoyaltyDetailData },
       { path: "detail/audit", Component: AuditDetailData },
       { path: "detail/expense", Component: ExpenseDetailData },
+      { path: "detail/sales-returns", Component: SalesReturnsDetailData },
     ],
   },
 ]);
