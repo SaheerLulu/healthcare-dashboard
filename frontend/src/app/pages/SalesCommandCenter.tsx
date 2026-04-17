@@ -31,7 +31,7 @@ import {
   PolarRadiusAxis,
 } from 'recharts';
 import { useApiData } from '../hooks/useApiData';
-import { toMonthlyTrend, toTopProducts, toPaymentMix, toHourlySales, toCustomers, toDoctors, toCategoryPie } from '../services/transforms';
+import { toMonthlyTrend, toTopProducts, toPaymentMix, toHourlySales, toCustomers, toDoctors, toCategoryPie, monthLabel } from '../services/transforms';
 import { formatIndianCurrencyAbbreviated } from '../utils/formatters';
 
 const COLORS = ['#0D9488', '#4F46E5', '#F59E0B', '#EF4444', '#10B981', '#8B5CF6', '#EC4899'];
@@ -69,7 +69,7 @@ export const SalesCommandCenter = () => {
   const { data: apiSlowMovers } = useApiData<any[]>('/sales/slow-movers/', []);
   const { data: apiProductProfitability } = useApiData<any[]>('/sales/product-profitability/', []);
   const { data: apiCustomerGrowth } = useApiData<any[]>('/sales/customer-growth/', []);
-  const { data: apiOutstandingAging } = useApiData<any[]>('/sales/outstanding-aging/', []);
+  const { data: apiOutstandingAging } = useApiData<any>('/sales/outstanding-aging/', { total_outstanding: 0, by_customer: [] });
   const { data: apiDoctorPrescriptionTrend } = useApiData<any[]>('/sales/doctor-prescription-trend/', []);
   const { data: apiDoctorRadar } = useApiData<any[]>('/sales/doctor-radar/', []);
   const { data: apiReturnsByCategory } = useApiData<any[]>('/sales/returns/by-category/', []);
@@ -97,7 +97,7 @@ export const SalesCommandCenter = () => {
 
   // Customer growth: API returns { sale_month, total_customers, revenue, orders }
   const customerGrowthData = (apiCustomerGrowth || []).map((r: any) => ({
-    month: r.sale_month?.split('-')[1] ? (['', 'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(r.sale_month.split('-')[1])] || r.sale_month) : r.sale_month,
+    month: monthLabel(r.sale_month || ''),
     newCustomers: Number(r.total_customers) || 0,
     b2bRevenue: Number(r.revenue) || 0,
     orders: Number(r.orders) || 0,
@@ -116,7 +116,7 @@ export const SalesCommandCenter = () => {
     prescriptions: Number(r.prescriptions) || 0,
   }));
   const doctorPrescriptionTrendData = (apiDoctorPrescriptionTrend || []).map((r: any) => ({
-    month: r.sale_month?.split('-')[1] ? (['', 'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(r.sale_month.split('-')[1])] || r.sale_month) : r.sale_month,
+    month: monthLabel(r.sale_month || ''),
     totalRx: Number(r.prescriptions) || 0,
     uniqueDoctors: Number(r.doctors) || 0,
     revenue: Number(r.revenue) || 0,
@@ -136,10 +136,10 @@ export const SalesCommandCenter = () => {
     qty: Number(r.qty) || 0,
   }));
   const returnsTrendData = (apiReturns.trend || []).map((r: any) => ({
-    month: r.return_month || '',
+    month: monthLabel(r.return_month || ''),
     value: Number(r.value) || 0,
     count: Number(r.count) || 0,
-    rate: 0,
+    rate: Number(r.rate) || 0,
   }));
   const returnsByReasonData = (apiReturns.by_reason || []).map((r: any) => ({
     reason: r.reason || 'Unknown',
@@ -151,7 +151,9 @@ export const SalesCommandCenter = () => {
     value: Number(r.value) || 0,
     count: Number(r.count) || 0,
     qty: Number(r.qty) || 0,
-    rate: 0,
+    rate: Number(r.rate) || 0,
+    returns: Number(r.returns) || 0,
+    totalSales: Number(r.totalSales) || 0,
   }));
   const returnImpactData = apiReturnImpact;
 

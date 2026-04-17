@@ -5,6 +5,23 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 
 
+def prior_period_range(filters):
+    """Same-duration window ending the day before start_date."""
+    start = date.fromisoformat(filters['start_date'])
+    end = date.fromisoformat(filters['end_date'])
+    days = (end - start).days + 1
+    return start - timedelta(days=days), start - timedelta(days=1)
+
+
+def growth_pct(current, previous):
+    """Signed percent change, rounded to 1 decimal; 0 when previous is 0."""
+    current = float(current or 0)
+    previous = float(previous or 0)
+    if not previous:
+        return 0.0
+    return round((current - previous) / previous * 100, 1)
+
+
 def parse_filters(request):
     """Extract common query params from request."""
     params = request.query_params
@@ -81,4 +98,30 @@ def apply_financial_filters(qs, filters):
         qs = qs.filter(location_id=filters['location_id'])
     elif 'location_ids' in filters:
         qs = qs.filter(location_id__in=filters['location_ids'])
+    return qs
+
+
+def apply_common_filters_range(qs, filters, start, end, date_field='sale_date'):
+    """Like apply_common_filters but with an explicit date range override.
+    Used for prior-period comparison queries."""
+    qs = qs.filter(**{f'{date_field}__gte': start, f'{date_field}__lte': end})
+
+    if 'location_id' in filters:
+        qs = qs.filter(location_id=filters['location_id'])
+    elif 'location_ids' in filters:
+        qs = qs.filter(location_id__in=filters['location_ids'])
+
+    if 'categories' in filters:
+        qs = qs.filter(product_category__in=filters['categories'])
+    elif 'category' in filters:
+        qs = qs.filter(product_category=filters['category'])
+    if 'channels' in filters:
+        qs = qs.filter(channel__in=filters['channels'])
+    elif 'channel' in filters:
+        qs = qs.filter(channel=filters['channel'])
+    if 'payment_methods' in filters:
+        qs = qs.filter(payment_method__in=filters['payment_methods'])
+    elif 'payment_method' in filters:
+        qs = qs.filter(payment_method=filters['payment_method'])
+
     return qs
