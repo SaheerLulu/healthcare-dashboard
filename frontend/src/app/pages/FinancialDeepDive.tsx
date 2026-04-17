@@ -87,23 +87,39 @@ export const FinancialDeepDive = () => {
   }));
   const balanceSheetItems = [...assetItems, ...liabilityItems];
 
-  // Cash flow — API returns single object, wrap in array for chart
-  const cashFlowItems = apiCashFlow.operating !== undefined ? [{
-    month: 'Current',
-    operating: Number(apiCashFlow.operating) || 0,
-    investing: Number(apiCashFlow.investing) || 0,
-    financing: Number(apiCashFlow.financing) || 0,
-    net: Number(apiCashFlow.net_cash_flow) || 0,
-  }] : [];
+  // Cash flow — API returns { operating, investing, financing, net_cash_flow, trend: [...] }
+  const cashFlowItems = (Array.isArray(apiCashFlow.trend) && apiCashFlow.trend.length
+    ? apiCashFlow.trend.map((r: any) => ({
+        month: r.month || r.period || '',
+        operating: Number(r.operating) || 0,
+        investing: Number(r.investing) || 0,
+        financing: Number(r.financing) || 0,
+        net: Number(r.net ?? r.net_cash_flow) || 0,
+      }))
+    : apiCashFlow.operating !== undefined ? [{
+        month: 'Current',
+        operating: Number(apiCashFlow.operating) || 0,
+        investing: Number(apiCashFlow.investing) || 0,
+        financing: Number(apiCashFlow.financing) || 0,
+        net: Number(apiCashFlow.net_cash_flow) || 0,
+      }] : []);
 
-  // Ratios — API returns single object, wrap for chart
-  const ratiosItems = apiRatios.current_ratio !== undefined ? [numericize({
-    month: 'Current',
-    currentRatio: Number(apiRatios.current_ratio) || 0,
-    debtEquity: Number(apiRatios.debt_to_equity) || 0,
-    roe: Number(apiRatios.roe) || 0,
-    roa: Number(apiRatios.roa) || 0,
-  })] : [];
+  // Ratios — API returns { current_ratio, debt_to_equity, roe, roa, trend: [...] }
+  const ratiosItems = (Array.isArray(apiRatios.trend) && apiRatios.trend.length
+    ? apiRatios.trend.map((r: any) => numericize({
+        month: r.month || r.period || '',
+        currentRatio: Number(r.currentRatio ?? r.current_ratio) || 0,
+        debtEquity: Number(r.debtEquity ?? r.debt_to_equity) || 0,
+        roe: Number(r.roe) || 0,
+        roa: Number(r.roa) || 0,
+      }))
+    : apiRatios.current_ratio !== undefined ? [numericize({
+        month: 'Current',
+        currentRatio: Number(apiRatios.current_ratio) || 0,
+        debtEquity: Number(apiRatios.debt_to_equity) || 0,
+        roe: Number(apiRatios.roe) || 0,
+        roa: Number(apiRatios.roa) || 0,
+      })] : []);
 
   // Profit bridge — already an array
   const profitBridgeItems = (Array.isArray(apiProfitBridge) ? apiProfitBridge : []).map((r: any) => ({

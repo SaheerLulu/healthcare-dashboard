@@ -78,9 +78,9 @@ export const InventoryOperations = () => {
 
   // Transform API data
   const stockByCategoryData = toInventoryCategory(apiByCategory);
-  const movementTrendData = (Array.isArray(apiMovement?.inbound) && apiMovement.inbound.length
-    ? apiMovement.inbound.map((r: any) => numericize(r))
-    : Array.isArray(apiMovement) ? (apiMovement as any[]).map((r: any) => numericize(r)) : []);
+  const movementTrendData = (Array.isArray(apiMovement?.data) ? apiMovement.data
+    : Array.isArray(apiMovement) ? apiMovement
+    : []).map((r: any) => numericize(r));
 
   // Expiry data from API
   const expiryData = apiExpiry.map((r: any) => ({
