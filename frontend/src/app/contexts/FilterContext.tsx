@@ -22,7 +22,15 @@ interface FilterContextType {
 const today = new Date();
 const sixMonthsAgo = new Date(today);
 sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-const toISO = (d: Date) => d.toISOString().slice(0, 10);
+// Format as local-time YYYY-MM-DD. toISOString() returns UTC, which in IST
+// (UTC+5:30) shifts the date back by one day for local-midnight Date objects
+// — that's why "Today" was rendering yesterday's date.
+const toISO = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+};
 const currentFY = today.getMonth() >= 3
   ? `FY ${today.getFullYear()}-${String(today.getFullYear() + 1).slice(2)}`
   : `FY ${today.getFullYear() - 1}-${String(today.getFullYear()).slice(2)}`;
@@ -30,7 +38,7 @@ const currentFY = today.getMonth() >= 3
 function computeDateRange(preset: string): { start: string; end: string } {
   const now = new Date();
   const t = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const iso = toISO;
 
   switch (preset) {
     case 'Today':

@@ -80,10 +80,11 @@ WSGI_APPLICATION = 'dashboard_project.wsgi.application'
 # ---------------------------------------------------------------------------
 # Database – shared SQLite with healthcare-inventory-management & accounting
 # ---------------------------------------------------------------------------
+_DEFAULT_SHARED_DB = (BASE_DIR.parent.parent / 'healthcare' / 'backend' / 'db.sqlite3').resolve()
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': '/home/sahee/biloop/healthcare-inventory-management/backend/db.sqlite3',
+        'NAME': os.environ.get('DJANGO_DB_PATH', str(_DEFAULT_SHARED_DB)),
     }
 }
 

@@ -211,13 +211,13 @@ export const SalesCommandCenter = () => {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Sales Command Center</h1>
-        <div className="flex gap-2">
-          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+        <div className="flex gap-2 flex-shrink-0">
+          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap">
             Download Report
           </button>
-          <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700">
+          <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 whitespace-nowrap">
             New Sale
           </button>
         </div>
@@ -254,7 +254,10 @@ export const SalesCommandCenter = () => {
           <div className="bg-white rounded-lg p-3 border border-indigo-100">
             <div className="text-[10px] text-gray-500 mb-1">Top Margin Product</div>
             <div className="text-sm font-bold text-indigo-700">{kpis.top_margin_product || '-'}</div>
-            <div className="text-[10px] text-green-600">{kpis.top_margin_product_growth ? `↑ ${kpis.top_margin_product_growth}% growth` : '-'}</div>
+            <div className="text-[10px] text-green-600">
+              {(kpis.top_margin_product_pct ?? 0) > 0 ? `${kpis.top_margin_product_pct}% margin` : ''}
+              {(kpis.top_margin_product_growth ?? 0) !== 0 ? ` · ${kpis.top_margin_product_growth > 0 ? '↑' : '↓'} ${Math.abs(kpis.top_margin_product_growth)}%` : ''}
+            </div>
           </div>
           <div className="bg-white rounded-lg p-3 border border-green-100">
             <div className="text-[10px] text-gray-500 mb-1">Net Profit</div>
@@ -421,7 +424,7 @@ export const SalesCommandCenter = () => {
                         className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('product') && isFiltered('product', product.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{product.name}</td>
-                        <td className="py-2 px-2 text-right text-gray-600">{product.qty.toLocaleString('en-IN')}</td>
+                        <td className="py-2 px-2 text-right text-gray-600">{(Number(product?.qty ?? 0)).toLocaleString('en-IN')}</td>
                         <td className="py-2 px-2 text-right text-gray-900">{formatIndianCurrencyAbbreviated(product.revenue)}</td>
                         <td className="py-2 px-2 text-right">
                           <span className={product.margin >= 20 ? 'text-green-600 font-medium' : product.margin >= 17 ? 'text-amber-600 font-medium' : 'text-red-600 font-medium'}>
@@ -578,7 +581,7 @@ export const SalesCommandCenter = () => {
                       <td className="py-2 px-2 text-gray-500">{index + 1}</td>
                       <td className="py-2 px-2 font-medium text-gray-900">{product.name}</td>
                       <td className="py-2 px-2 text-gray-600">{product.category}</td>
-                      <td className="py-2 px-2 text-right text-gray-900">{product.qty.toLocaleString('en-IN')}</td>
+                      <td className="py-2 px-2 text-right text-gray-900">{(Number(product?.qty ?? 0)).toLocaleString('en-IN')}</td>
                       <td className="py-2 px-2 text-right text-gray-900">₹{(product.revenue / 1000).toFixed(1)}K</td>
                       <td className="py-2 px-2 text-right text-gray-600">₹{(product.cost / 1000).toFixed(1)}K</td>
                       <td className="py-2 px-2 text-right text-green-600 font-medium">₹{(product.profit / 1000).toFixed(1)}K</td>

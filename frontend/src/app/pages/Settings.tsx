@@ -140,7 +140,7 @@ export const Settings = () => {
                       Pipeline completed successfully
                     </div>
                     <div className="text-xs text-green-700 mt-0.5">
-                      {pipelineState.result.total_records} records synced in {pipelineState.result.duration_seconds}s
+                      {pipelineState.result.total_records} records synced in {Number(pipelineState.result.duration_seconds).toFixed(2)}s
                     </div>
                   </>
                 ) : (
@@ -185,7 +185,7 @@ export const Settings = () => {
                           </div>
                         </td>
                         <td className="py-2.5 px-4 text-right text-gray-900">{log.records_processed.toLocaleString('en-IN')}</td>
-                        <td className="py-2.5 px-4 text-right text-gray-600">{log.duration_seconds}s</td>
+                        <td className="py-2.5 px-4 text-right text-gray-600">{Number(log.duration_seconds).toFixed(2)}s</td>
                         <td className="py-2.5 px-4">
                           <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded ${
                             log.status === 'success'

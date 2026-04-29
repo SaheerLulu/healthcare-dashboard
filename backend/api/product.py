@@ -61,7 +61,8 @@ def overview(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def lifecycle(request):
-    """Classify products by lifecycle stage based on sales growth."""
+    """Classify products by lifecycle stage and aggregate counts per stage.
+    The Pie chart on /product expects one slice per stage, not per product."""
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
 
@@ -72,19 +73,34 @@ def lifecycle(request):
             qty=Sum('quantity'),
             months_active=Count('sale_month', distinct=True),
         )
-        .order_by('-revenue')
     )
 
+    # Bucket each product into a stage, then aggregate counts + revenue.
+    stage_buckets = {
+        'Introduction': {'count': 0, 'revenue': 0.0},
+        'Growth': {'count': 0, 'revenue': 0.0},
+        'Maturity': {'count': 0, 'revenue': 0.0},
+        'Decline': {'count': 0, 'revenue': 0.0},
+    }
     for p in products:
         months = p['months_active'] or 1
+        rev = float(p['revenue'] or 0)
         if months <= 2:
-            p['stage'] = 'Introduction'
-        elif p['revenue'] and float(p['revenue']) > 0:
-            p['stage'] = 'Growth' if months <= 4 else 'Maturity'
+            stage = 'Introduction'
+        elif rev > 0 and months <= 4:
+            stage = 'Growth'
+        elif rev > 0:
+            stage = 'Maturity'
         else:
-            p['stage'] = 'Decline'
+            stage = 'Decline'
+        stage_buckets[stage]['count'] += 1
+        stage_buckets[stage]['revenue'] += rev
 
-    return Response(products)
+    # Return one row per stage so the chart renders one slice per stage.
+    return Response([
+        {'stage': stage, 'count': v['count'], 'revenue': round(v['revenue'], 2)}
+        for stage, v in stage_buckets.items()
+    ])
 
 
 @api_view(['GET'])
@@ -92,14 +108,19 @@ def lifecycle(request):
 def pricing(request):
     f = parse_filters(request)
 
-    # Average purchase rate and selling price per product
-    purchase_data = dict(
-        ReportPurchases.objects
+    # Average purchase rate and selling price per product. dict() over a
+    # 3-column values_list raises ValueError ("dictionary update sequence
+    # element #0 has length 3; 2 is required") — build a dict-of-dicts.
+    purchase_data = {
+        row['product_id']: {
+            'avg_cost': float(row['avg_cost'] or 0),
+            'avg_mrp': float(row['avg_mrp'] or 0),
+        }
+        for row in ReportPurchases.objects
         .filter(bill_date__gte=f['start_date'], bill_date__lte=f['end_date'], is_return=False)
         .values('product_id')
         .annotate(avg_cost=Avg('purchase_rate'), avg_mrp=Avg('mrp'))
-        .values_list('product_id', 'avg_cost', 'avg_mrp')
-    )
+    }
 
     sales_qs = apply_common_filters(ReportSales.objects.all(), f)
     products = list(
@@ -111,6 +132,15 @@ def pricing(request):
         )
         .order_by('-total_revenue')[:f['limit']]
     )
+
+    # Enrich with cost / MRP from purchase_data
+    for p in products:
+        purchase = purchase_data.get(p['product_id'], {})
+        p['avg_cost'] = purchase.get('avg_cost', 0)
+        p['avg_mrp'] = purchase.get('avg_mrp', 0)
+        sp = float(p['avg_selling_price'] or 0)
+        cost = p['avg_cost']
+        p['margin_pct'] = round((sp - cost) / sp * 100, 1) if sp else 0
 
     return Response(products)
 

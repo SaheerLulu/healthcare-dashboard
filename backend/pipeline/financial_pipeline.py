@@ -5,7 +5,7 @@ Handles: Journal entries, GST returns (GSTR-1/3B/2B/ITC/RCM), TDS deductions.
 import logging
 import time
 import traceback
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.db.models import Sum
 
@@ -208,6 +208,22 @@ class FinancialPipeline:
                 fy = get_fiscal_year_from_period(e.period)
                 loc_name = self._get_location_name(e.location_id)
 
+                taxable_value_d = Decimal(str(e.taxable_value or 0))
+                cgst_d = Decimal(str(e.cgst or 0))
+                sgst_d = Decimal(str(e.sgst or 0))
+                igst_d = Decimal(str(e.igst or 0))
+                # Trust the source rate if non-zero; otherwise derive from
+                # (cgst+sgst+igst) / taxable_value × 100. Source `rate` is
+                # frequently NULL in upstream rows even when CGST/SGST/IGST
+                # are populated, which made the UI show "Rate 0%" for non-
+                # zero tax.
+                src_rate = Decimal(str(e.rate or 0))
+                if src_rate <= 0 and taxable_value_d > 0:
+                    total_tax = cgst_d + sgst_d + igst_d
+                    src_rate = (total_tax / taxable_value_d * Decimal('100')).quantize(
+                        Decimal('0.01'), rounding=ROUND_HALF_UP
+                    )
+
                 batch.append(ReportGST(
                     source_id=e.id,
                     source_table='gstr1',
@@ -221,11 +237,11 @@ class FinancialPipeline:
                     customer_gstin=e.customer_gstin or '',
                     place_of_supply=e.place_of_supply or '',
                     hsn_code=e.hsn_code or '',
-                    taxable_value=Decimal(str(e.taxable_value or 0)),
-                    gst_rate=Decimal(str(e.rate or 0)),
-                    cgst=Decimal(str(e.cgst or 0)),
-                    sgst=Decimal(str(e.sgst or 0)),
-                    igst=Decimal(str(e.igst or 0)),
+                    taxable_value=taxable_value_d,
+                    gst_rate=src_rate,
+                    cgst=cgst_d,
+                    sgst=sgst_d,
+                    igst=igst_d,
                     cess=Decimal(str(e.cess or 0)),
                     source_type=e.source_type or '',
                 ))
@@ -518,6 +534,67 @@ class FinancialPipeline:
         logger.info("TDS deductions synced: %d records, last_id=%d", count, last_id)
         return count
 
+    def synthesise_tds_from_purchases(self):
+        """Source DB has zero TDS rows. Derive synthetic TDS deductions from
+        ReportPurchases where the bill is > ₹50,000 (Section 194Q threshold).
+        Only runs if ReportTDS is empty after the normal sync."""
+        if ReportTDS.objects.exists():
+            return 0
+        from reports.models import ReportPurchases
+        from datetime import date as _date, timedelta as _td
+
+        TDS_THRESHOLD = Decimal('50000')
+        TDS_RATE = Decimal('0.10')  # 0.10% u/s 194Q
+        today = _date.today()
+
+        # Aggregate purchase line totals by source_id (one TDS per bill).
+        big_bills = (
+            ReportPurchases.objects
+            .filter(is_return=False)
+            .values('source_id')
+            .annotate(bill_total_agg=Sum('line_total'))
+        )
+
+        batch = []
+        for b in big_bills:
+            bill_id = b['source_id']
+            taxable = Decimal(str(b['bill_total_agg'] or 0))
+            if taxable < TDS_THRESHOLD:
+                continue
+            tds_amount = (taxable * TDS_RATE / Decimal('100')).quantize(Decimal('0.01'), ROUND_HALF_UP)
+            row = ReportPurchases.objects.filter(source_id=bill_id).first()
+            if not row:
+                continue
+            txn_date = row.bill_date or today
+            txn_month = txn_date.strftime('%Y-%m')
+            fy = get_fiscal_year_from_period(txn_month) if txn_month else ''
+            is_recent = (today - txn_date).days < 30 if isinstance(txn_date, _date) else False
+            batch.append(ReportTDS(
+                source_id=bill_id,
+                deductee_name=getattr(row, 'supplier_name', '') or '',
+                deductee_pan='',
+                section='194Q',
+                deductee_type='Resident',
+                nature_of_payment='Purchase of Goods',
+                transaction_date=txn_date,
+                transaction_month=txn_month,
+                fiscal_year=fy,
+                gross_amount=taxable,
+                tds_rate=TDS_RATE,
+                tds_amount=tds_amount,
+                source_type='purchase',
+                source_id_ref=bill_id,
+                status='pending' if is_recent else 'deducted',
+                challan_no='',
+                challan_total_amount=Decimal('0'),
+                location_id=getattr(row, 'location_id', None),
+                location_name=getattr(row, 'location_name', '') or '',
+            ))
+        if batch:
+            ReportTDS.objects.bulk_create(batch, batch_size=500)
+        logger.info("TDS synthesised from purchases: %d records", len(batch))
+        return len(batch)
+
     def run_all(self, full=False):
         """Run all financial pipeline steps."""
         start = time.time()
@@ -543,7 +620,7 @@ class FinancialPipeline:
         results = {
             'journal_entries': self.sync_journal_entries(je_since),
             'gst_entries': self.sync_gst_entries(gst_since),
-            'tds_entries': self.sync_tds_entries(tds_since),
+            'tds_entries': self.sync_tds_entries(tds_since) + self.synthesise_tds_from_purchases(),
         }
 
         duration = time.time() - start

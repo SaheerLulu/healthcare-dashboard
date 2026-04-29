@@ -37,14 +37,14 @@ export const InventoryDetailData = () => {
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-6">
-        <div>
+      <div className="flex items-center justify-between mb-6 gap-4">
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold text-gray-900">Inventory Detail Data</h1>
           <p className="text-sm text-gray-600 mt-1">
             Showing {rows.length} items | Total Value: {formatIndianCurrencyAbbreviated(rows.reduce((sum: number, item: any) => sum + (Number(item.stock_value_cost) || 0), 0))}
           </p>
         </div>
-        <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+        <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap flex-shrink-0">
           <Download className="w-4 h-4 inline mr-2" />
           Export CSV
         </button>
@@ -115,14 +115,14 @@ export const PurchaseDetailData = () => {
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-6">
-        <div>
+      <div className="flex items-center justify-between mb-6 gap-4">
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold text-gray-900">Purchase Detail Data</h1>
           <p className="text-sm text-gray-600 mt-1">
             Showing {rows.length} purchases | Total: {formatIndianCurrencyAbbreviated(rows.reduce((sum: number, item: any) => sum + (Number(item.line_total) || 0), 0))}
           </p>
         </div>
-        <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+        <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap flex-shrink-0">
           <Download className="w-4 h-4 inline mr-2" />
           Export Excel
         </button>
@@ -191,14 +191,14 @@ export const FinancialDetailData = () => {
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-6">
-        <div>
+      <div className="flex items-center justify-between mb-6 gap-4">
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold text-gray-900">Financial Detail Data</h1>
           <p className="text-sm text-gray-600 mt-1">
             Showing {rows.length} journal entries
           </p>
         </div>
-        <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+        <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap flex-shrink-0">
           <Download className="w-4 h-4 inline mr-2" />
           Export Ledger
         </button>
@@ -267,14 +267,14 @@ export const GSTDetailData = () => {
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-6">
-        <div>
+      <div className="flex items-center justify-between mb-6 gap-4">
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold text-gray-900">GST Detail Data</h1>
           <p className="text-sm text-gray-600 mt-1">
             Showing {rows.length} GST entries
           </p>
         </div>
-        <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+        <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap flex-shrink-0">
           <Download className="w-4 h-4 inline mr-2" />
           Export GSTR-1
         </button>

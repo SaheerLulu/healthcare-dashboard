@@ -1,5 +1,5 @@
 import React, { ReactNode } from 'react';
-import { ArrowUp, ArrowDown, TrendingUp } from 'lucide-react';
+import { ArrowUp, ArrowDown } from 'lucide-react';
 
 interface KPICardProps {
   title: string;
@@ -28,38 +28,74 @@ export const KPICard: React.FC<KPICardProps> = ({
   return (
     <div
       onClick={onClick}
-      className={`bg-white rounded-lg border border-gray-200 shadow-sm p-4 ${
-        onClick ? 'cursor-pointer hover:shadow-md hover:border-teal-300 transition-all' : ''
-      } ${className}`}
+      className={`rounded-xl p-5 card-shadow ${onClick ? 'cursor-pointer card-hover' : ''} ${className}`}
+      style={{
+        backgroundColor: 'var(--surface-0)',
+        border: '1px solid var(--line)',
+      }}
     >
-      <div className="flex items-start justify-between mb-1">
-        <div className="text-xs font-medium text-gray-600">{title}</div>
-        {icon && <div className="opacity-60">{icon}</div>}
-      </div>
-      
-      <div className="flex items-end justify-between mb-2">
-        <div className="text-2xl font-bold text-gray-900">{value}</div>
-        
-        {trend && (
-          <div
-            className={`flex items-center gap-1 text-sm font-medium ${
-              trend.direction === 'up' ? 'text-green-600' : 'text-red-600'
-            }`}
-          >
-            {trend.direction === 'up' ? (
-              <ArrowUp className="w-4 h-4" />
-            ) : (
-              <ArrowDown className="w-4 h-4" />
-            )}
-            <span>{trend.value}</span>
+      <div className="flex items-start justify-between mb-2">
+        <div
+          className="text-xs font-semibold uppercase tracking-wider"
+          style={{ color: 'var(--ink-2)' }}
+        >
+          {title}
+        </div>
+        {icon && (
+          <div className="opacity-70" style={{ color: 'var(--brand)' }}>
+            {icon}
           </div>
         )}
       </div>
-      
-      {subtitle && <div className="text-xs text-gray-500 mb-2">{subtitle}</div>}
-      
+
+      <div className="flex items-baseline justify-between gap-3 mt-1">
+        <div
+          className="hero-num"
+          style={{
+            fontSize: 28,
+            fontWeight: 700,
+            letterSpacing: '-0.02em',
+            color: 'var(--ink)',
+            fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+            lineHeight: 1.1,
+          }}
+        >
+          {value}
+        </div>
+
+        {/* Suppress the trend badge when the value is empty / 0 / "0%" /
+            "0pp" — a "↑ 0%" badge is misleading when there's actually no
+            prior-period data to compare against. */}
+        {trend && (() => {
+          const v = String(trend.value || '').trim();
+          const numeric = parseFloat(v.replace(/[^0-9.\-]/g, ''));
+          const isZero = !v || v === '0' || v === '0%' || v === '0pp' || v === '0.0%' || v === '0.0pp' || numeric === 0;
+          if (isZero) return null;
+          return (
+            <span
+              className="mono text-[11px] font-semibold inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded"
+              style={{
+                background: trend.direction === 'up'
+                  ? 'rgba(31, 138, 76, 0.12)'
+                  : 'rgba(192, 57, 43, 0.10)',
+                color: trend.direction === 'up' ? 'var(--success)' : 'var(--danger)',
+              }}
+            >
+              {trend.direction === 'up' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
+              {trend.value}
+            </span>
+          );
+        })()}
+      </div>
+
+      {subtitle && (
+        <div className="text-xs mt-1.5" style={{ color: 'var(--ink-3)' }}>
+          {subtitle}
+        </div>
+      )}
+
       {sparkline && (
-        <div className="h-12 mt-2">
+        <div className="h-12 mt-3">
           {sparkline}
         </div>
       )}

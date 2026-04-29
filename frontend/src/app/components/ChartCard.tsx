@@ -8,55 +8,51 @@ interface ChartCardProps {
   className?: string;
 }
 
+const ActionButton = ({ title, children }: { title: string; children: ReactNode }) => (
+  <button
+    title={title}
+    className="p-1.5 rounded-md transition-colors"
+    style={{ color: 'var(--ink-3)' }}
+    onMouseEnter={(e) => {
+      e.currentTarget.style.backgroundColor = 'var(--color-hover-bg)';
+      e.currentTarget.style.color = 'var(--ink-2)';
+    }}
+    onMouseLeave={(e) => {
+      e.currentTarget.style.backgroundColor = '';
+      e.currentTarget.style.color = 'var(--ink-3)';
+    }}
+  >
+    {children}
+  </button>
+);
+
 export const ChartCard: React.FC<ChartCardProps> = ({
   title,
   children,
-  onDrillThrough,
   className = '',
 }) => {
   return (
-    <div className={`bg-white rounded-lg border border-gray-200 shadow-sm p-4 ${className}`}>
+    <div
+      className={`rounded-xl p-5 card-shadow ${className}`}
+      style={{
+        backgroundColor: 'var(--surface-0)',
+        border: '1px solid var(--line)',
+      }}
+    >
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
-        
-        <div className="flex items-center gap-1">
-          <button
-            className="p-1.5 hover:bg-gray-100 rounded transition-colors"
-            title="Focus Mode"
-          >
-            <Focus className="w-4 h-4 text-gray-600" />
-          </button>
-          
-          <button
-            className="p-1.5 hover:bg-gray-100 rounded transition-colors"
-            title="Show Data Table"
-          >
-            <Table2 className="w-4 h-4 text-gray-600" />
-          </button>
-          
-          <button
-            className="p-1.5 hover:bg-gray-100 rounded transition-colors"
-            title="Full Screen"
-          >
-            <Maximize2 className="w-4 h-4 text-gray-600" />
-          </button>
-          
-          <button
-            className="p-1.5 hover:bg-gray-100 rounded transition-colors"
-            title="Download"
-          >
-            <Download className="w-4 h-4 text-gray-600" />
-          </button>
-          
-          <button
-            className="p-1.5 hover:bg-gray-100 rounded transition-colors"
-            title="More Options"
-          >
-            <MoreVertical className="w-4 h-4 text-gray-600" />
-          </button>
+        <h3 className="text-sm font-semibold tracking-tight" style={{ color: 'var(--ink)' }}>
+          {title}
+        </h3>
+
+        <div className="flex items-center gap-0.5">
+          <ActionButton title="Focus Mode"><Focus className="w-4 h-4" /></ActionButton>
+          <ActionButton title="Show Data Table"><Table2 className="w-4 h-4" /></ActionButton>
+          <ActionButton title="Full Screen"><Maximize2 className="w-4 h-4" /></ActionButton>
+          <ActionButton title="Download"><Download className="w-4 h-4" /></ActionButton>
+          <ActionButton title="More Options"><MoreVertical className="w-4 h-4" /></ActionButton>
         </div>
       </div>
-      
+
       <div className="chart-content">
         {children}
       </div>

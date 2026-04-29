@@ -115,13 +115,13 @@ export const GSTCompliance = () => {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">GST & Compliance Center</h1>
-        <div className="flex gap-2">
-          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+        <div className="flex gap-2 flex-shrink-0">
+          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap">
             Download Returns
           </button>
-          <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700">
+          <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 whitespace-nowrap">
             File GSTR-1
           </button>
         </div>
@@ -282,16 +282,16 @@ export const GSTCompliance = () => {
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
                       <td className="py-2 px-2 text-right text-gray-900">
-                        ₹{(item.b2b / 1000).toFixed(0)}K
+                        ₹{((Number(item.b2b) || 0) / 1000).toFixed(0)}K
                       </td>
                       <td className="py-2 px-2 text-right text-gray-900">
-                        ₹{(item.b2c / 1000).toFixed(0)}K
+                        ₹{((Number(item.b2c) || 0) / 1000).toFixed(0)}K
                       </td>
                       <td className="py-2 px-2 text-right text-gray-900">
-                        ₹{(item.export / 1000).toFixed(0)}K
+                        ₹{((Number(item.export) || 0) / 1000).toFixed(0)}K
                       </td>
                       <td className="py-2 px-2 text-right text-teal-600 font-semibold">
-                        ₹{(item.total / 1000).toFixed(0)}K
+                        ₹{((Number(item.total) || 0) / 1000).toFixed(0)}K
                       </td>
                     </tr>
                   ))}
@@ -559,7 +559,7 @@ export const GSTCompliance = () => {
                         ₹{(item.value / 1000).toFixed(1)}K
                       </td>
                       <td className="py-2 px-2 text-right text-gray-900">
-                        {item.percent.toFixed(1)}%
+                        {(Number(item?.percent ?? 0)).toFixed(1)}%
                       </td>
                       <td className="py-2 px-2 text-center">
                         {item.category === 'Eligible ITC' && (

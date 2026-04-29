@@ -5,7 +5,7 @@ import { companies } from './companies';
 
 function generateProducts(): Product[] {
   return PRODUCT_TEMPLATES.map((template, i) => {
-    const mrp = randomFloat(template.mrpRange[0], template.mrpRange[1]);
+    const mrp = randomFloat(template.mrpRange.min, template.mrpRange.max);
     const ptr = Number((mrp * template.ptrRatio).toFixed(2));
     const pts = Number((ptr * randomFloat(0.88, 0.95)).toFixed(2));
     const purchasePrice = Number((pts * randomFloat(0.85, 0.95)).toFixed(2));

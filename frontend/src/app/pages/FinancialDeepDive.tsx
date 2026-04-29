@@ -177,7 +177,16 @@ export const FinancialDeepDive = () => {
   const netMargin = netRevenue ? ((netProfit / netRevenue) * 100).toFixed(1) : '0.0';
   const totalAssets = Number(apiBalanceSheet.total_assets) || 0;
   const totalLiabilities = Number(apiBalanceSheet.total_liabilities) || 0;
-  const workingCapital = totalAssets - totalLiabilities;
+  // Use Receivables - Payables to match the /working-capital page; previously
+  // this used `total_assets - total_liabilities` which gave a different number
+  // for the same data on the two pages.
+  const findAmt = (arr: any[] = [], subtype: string) => {
+    const row = arr.find((r: any) => r.account_subtype === subtype);
+    return row ? Number(row.amount) || 0 : 0;
+  };
+  const receivablesAmt = findAmt(apiBalanceSheet.asset_breakdown, 'Receivable');
+  const payablesAmt = findAmt(apiBalanceSheet.liability_breakdown, 'Payable');
+  const workingCapital = receivablesAmt - payablesAmt;
   const currentRatio = totalLiabilities ? (totalAssets / totalLiabilities).toFixed(1) : '0.0';
 
   // Filtered data for cross-filtering
@@ -190,13 +199,13 @@ export const FinancialDeepDive = () => {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Financial Deep Dive</h1>
-        <div className="flex gap-2">
-          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+        <div className="flex gap-2 flex-shrink-0">
+          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap">
             Export P&L
           </button>
-          <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700">
+          <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 whitespace-nowrap">
             Generate Report
           </button>
         </div>
@@ -256,7 +265,15 @@ export const FinancialDeepDive = () => {
                       ))}
                     </Bar>
                     <Line yAxisId="right" type="monotone" stroke="#F59E0B" strokeWidth={2} name="Margin" dot={{ fill: '#F59E0B', r: 4 }}
-                      dataKey={(data: any) => data.revenue ? Number(((data.grossProfit / data.revenue) * 100).toFixed(1)) : 0} />
+                      dataKey={(data: any) => {
+                        // Skip months with no revenue (early periods often
+                        // have expense entries but no sales — division blew
+                        // up to -6000%). Cap remaining at [-100, 100].
+                        if (!data.revenue) return null;
+                        const m = (data.grossProfit / data.revenue) * 100;
+                        if (!isFinite(m)) return null;
+                        return Number(Math.max(-100, Math.min(100, m)).toFixed(1));
+                      }} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>

@@ -234,51 +234,15 @@ export const InventoryOperations = () => {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Inventory Operations</h1>
-        <div className="flex gap-2">
-          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+        <div className="flex gap-2 flex-shrink-0">
+          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap">
             Download Stock Report
           </button>
-          <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700">
+          <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 whitespace-nowrap">
             Stock Adjustment
           </button>
-        </div>
-      </div>
-
-      {/* P&L Impact Story Banner */}
-      <div className="bg-gradient-to-r from-amber-50 via-white to-red-50 rounded-lg border border-amber-200 p-4 mb-6">
-        <div className="flex items-center gap-2 mb-3">
-          <DollarSign className="w-4 h-4 text-amber-600" />
-          <h3 className="text-sm font-semibold text-gray-900">Inventory Impact on Profitability</h3>
-          <span className="text-xs text-gray-500 ml-auto">How inventory decisions affect your bottom line</span>
-        </div>
-        <div className="grid grid-cols-5 gap-3">
-          <div className="bg-white rounded-lg p-3 border border-red-100">
-            <div className="text-[10px] text-gray-500 mb-1">Monthly Carrying Cost</div>
-            <div className="text-sm font-bold text-red-700">{formatIndianCurrencyAbbreviated(carryingCostMonthly)}</div>
-            <div className="text-[10px] text-red-500">Recurring monthly expense</div>
-          </div>
-          <div className="bg-white rounded-lg p-3 border border-red-100">
-            <div className="text-[10px] text-gray-500 mb-1">Write-offs This Month</div>
-            <div className="text-sm font-bold text-red-700">{formatIndianCurrencyAbbreviated(writeOffsThisMonth)}</div>
-            <div className="text-[10px] text-red-500">Net profit impact</div>
-          </div>
-          <div className="bg-white rounded-lg p-3 border border-amber-100">
-            <div className="text-[10px] text-gray-500 mb-1">Stockout Lost Sales</div>
-            <div className="text-sm font-bold text-amber-700">{formatIndianCurrencyAbbreviated(stockoutLostSales)}</div>
-            <div className="text-[10px] text-amber-500">{stockOutAlerts} products out of stock</div>
-          </div>
-          <div className="bg-white rounded-lg p-3 border border-amber-100">
-            <div className="text-[10px] text-gray-500 mb-1">Dead Stock Value</div>
-            <div className="text-sm font-bold text-amber-700">{formatIndianCurrencyAbbreviated(deadStockValue)}</div>
-            <div className="text-[10px] text-amber-500">Capital locked for 90+ days</div>
-          </div>
-          <div className="bg-white rounded-lg p-3 border border-green-100">
-            <div className="text-[10px] text-gray-500 mb-1">Optimization Potential</div>
-            <div className="text-sm font-bold text-green-700">{formatIndianCurrencyAbbreviated(optimizationPotential)}</div>
-            <div className="text-[10px] text-green-500">Recoverable through actions</div>
-          </div>
         </div>
       </div>
 
@@ -314,8 +278,8 @@ export const InventoryOperations = () => {
         />
         <KPICard
           title="Inventory Turnover"
-          value={inventoryTurnover ? `${inventoryTurnover}x` : '--'}
-          subtitle={avgDsi ? `Avg: ${avgDsi} days` : ''}
+          value={inventoryTurnover ? `${Number(inventoryTurnover).toFixed(2)}x` : '--'}
+          subtitle={avgDsi ? `Avg: ${Math.round(Number(avgDsi))} days` : ''}
           trend={{ value: '', direction: 'up' }}
         />
       </div>
@@ -449,9 +413,9 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {stockAlertItems.map((alert) => (
+                  {stockAlertItems.map((alert, idx) => (
                     <tr
-                      key={alert.product}
+                      key={`${idx}-${alert.product}`}
                       onClick={() => {
                         toggleCrossFilter({
                           id: 'product',
@@ -480,10 +444,10 @@ export const InventoryOperations = () => {
                         )}
                       </td>
                       <td className="py-2 px-2 text-right text-gray-900">
-                        {alert.qty.toLocaleString('en-IN')}
+                        {(Number(alert?.qty ?? 0)).toLocaleString('en-IN')}
                       </td>
                       <td className="py-2 px-2 text-right text-gray-600">
-                        {alert.reorder.toLocaleString('en-IN')}
+                        {(Number(alert?.reorder ?? 0)).toLocaleString('en-IN')}
                       </td>
                       <td className="py-2 px-2 text-right text-gray-600">{alert.lastSale}</td>
                     </tr>
@@ -582,9 +546,9 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {expiryData.map((item) => (
+                  {expiryData.map((item, idx) => (
                     <tr
-                      key={item.range}
+                      key={`${idx}-${item.range}`}
                       onClick={() => {
                         toggleCrossFilter({
                           id: 'expiryRange',
@@ -596,7 +560,7 @@ export const InventoryOperations = () => {
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.range}</td>
                       <td className="py-2 px-2 text-right text-gray-900">
-                        {item.qty.toLocaleString('en-IN')}
+                        {(Number(item?.qty ?? 0)).toLocaleString('en-IN')}
                       </td>
                       <td className="py-2 px-2 text-right text-gray-900">
                         ₹{(item.value / 1000).toFixed(0)}K
@@ -716,9 +680,9 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {movementTrendData.map((item: any) => (
+                  {movementTrendData.map((item, idx) => (
                     <tr
-                      key={item.month}
+                      key={`${idx}-${item.month}`}
                       onClick={() => {
                         toggleCrossFilter({
                           id: 'month',
@@ -847,9 +811,9 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {abcVedMatrix.map((item) => (
+                  {abcVedMatrix.map((item, idx) => (
                     <tr
-                      key={item.classification}
+                      key={`${idx}-${item.classification}`}
                       onClick={() => {
                         toggleCrossFilter({
                           id: 'classification',
@@ -861,7 +825,7 @@ export const InventoryOperations = () => {
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.classification}</td>
                       <td className="py-2 px-2 text-right text-gray-900">
-                        {item.items.toLocaleString('en-IN')}
+                        {(Number(item?.items ?? 0)).toLocaleString('en-IN')}
                       </td>
                       <td className="py-2 px-2 text-right text-gray-900">
                         ₹{(item.value / 100000).toFixed(2)}L
@@ -1000,9 +964,9 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {deadStockItems.map((item) => (
+                  {deadStockItems.map((item, idx) => (
                     <tr
-                      key={item.product}
+                      key={`${idx}-${item.product}`}
                       onClick={() => {
                         toggleCrossFilter({
                           id: 'product',
@@ -1014,7 +978,7 @@ export const InventoryOperations = () => {
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.product}</td>
                       <td className="py-2 px-2 text-right text-gray-900">
-                        {item.qty.toLocaleString('en-IN')}
+                        {(Number(item?.qty ?? 0)).toLocaleString('en-IN')}
                       </td>
                       <td className="py-2 px-2 text-right text-gray-900">
                         ₹{(item.value / 1000).toFixed(0)}K
@@ -1137,9 +1101,9 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {optimizationRecommendations.map((item: any) => (
+                  {optimizationRecommendations.map((item, idx) => (
                     <tr
-                      key={item.action}
+                      key={`${idx}-${item.action}`}
                       onClick={() => {
                         toggleCrossFilter({
                           id: 'category',
@@ -1193,10 +1157,10 @@ export const InventoryOperations = () => {
           {/* Forecast KPIs */}
           <div className="grid grid-cols-5 gap-4 mb-6">
             <KPICard title="Forecast Accuracy" value={apiForecast.accuracy_pct ? `${apiForecast.accuracy_pct}%` : '--'} subtitle={apiForecast.mape ? `MAPE: ${apiForecast.mape}%` : ''} trend={{ value: '', direction: 'up' }} icon={<Target className="w-5 h-5 text-teal-600" />} />
-            <KPICard title="Next Month Demand" value={apiForecast.next_month_demand ? apiForecast.next_month_demand.toLocaleString('en-IN') : '--'} subtitle={apiForecast.next_month_label || ''} trend={{ value: '', direction: 'up' }} icon={<TrendingUp className="w-5 h-5 text-indigo-600" />} />
+            <KPICard title="Next Month Demand" value={apiForecast.next_month_demand ? (Number(apiForecast?.next_month_demand ?? 0)).toLocaleString('en-IN') : '--'} subtitle={apiForecast.next_month_label || ''} trend={{ value: '', direction: 'up' }} icon={<TrendingUp className="w-5 h-5 text-indigo-600" />} />
             <KPICard title="Seasonal Peak" value={apiForecast.seasonal_peak || '--'} subtitle={apiForecast.seasonal_peak_note || ''} trend={{ value: '', direction: 'up' }} />
-            <KPICard title="Reorder Alerts" value={apiForecast.reorder_alerts ? `${apiForecast.reorder_alerts} SKUs` : '--'} subtitle={apiForecast.reorder_note || ''} trend={{ value: '', direction: 'up' }} icon={<AlertTriangle className="w-5 h-5 text-amber-600" />} />
-            <KPICard title="Overstock Risk" value={apiForecast.overstock_risk ? formatIndianCurrencyAbbreviated(apiForecast.overstock_risk) : '--'} subtitle={apiForecast.overstock_note || ''} trend={{ value: '', direction: 'down' }} />
+            <KPICard title="Reorder Alerts" value={`${apiForecast.reorder_alerts ?? 0} SKUs`} subtitle={apiForecast.reorder_note || ''} trend={{ value: '', direction: 'up' }} icon={<AlertTriangle className="w-5 h-5 text-amber-600" />} />
+            <KPICard title="Overstock Risk" value={`${apiForecast.overstock_risk ?? 0} SKUs`} subtitle={apiForecast.overstock_note || ''} trend={{ value: '', direction: 'down' }} />
           </div>
 
           {/* Charts Row 1 */}
@@ -1284,8 +1248,8 @@ export const InventoryOperations = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {forecastAccuracyByCategory.map((item: any) => (
-                      <tr key={item.category} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                    {forecastAccuracyByCategory.map((item, idx) => (
+                      <tr key={`${idx}-${item.category}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
                         onClick={() => toggleCrossFilter({ id: 'category', label: `Category: ${item.category}`, value: item.category })}>
                         <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
                         <td className="py-2 px-2 text-right"><span className={item.mape <= 5 ? 'text-green-600' : item.mape <= 7 ? 'text-amber-600' : 'text-red-600'}>{item.mape}%</span></td>
@@ -1325,8 +1289,8 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {safetyStockAnalysis.map((item: any) => (
-                    <tr key={item.product} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                  {safetyStockAnalysis.map((item: any, idx: number) => (
+                    <tr key={`${idx}-${item.product}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
                       onClick={() => toggleCrossFilter({ id: 'product', label: `Product: ${item.product}`, value: item.product })}>
                       <td className="py-2 px-2 font-medium text-gray-900">{item.product}</td>
                       <td className="py-2 px-2 text-right text-gray-600">{item.avgDemand}</td>
@@ -1427,10 +1391,10 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {categoryEfficiency.map((item: any) => {
+                  {categoryEfficiency.map((item, idx) => {
                     const health = item.gmroi >= 3 ? 'excellent' : item.gmroi >= 2 ? 'good' : item.gmroi >= 1 ? 'fair' : 'poor';
                     return (
-                      <tr key={item.category} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      <tr key={`${idx}-${item.category}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
                         onClick={() => toggleCrossFilter({ id: 'category', label: `Category: ${item.category}`, value: item.category })}>
                         <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
                         <td className="py-2 px-2 text-right"><span className={item.turnover >= 8 ? 'text-green-600 font-medium' : item.turnover >= 5 ? 'text-amber-600' : 'text-red-600'}>{item.turnover}x</span></td>
@@ -1474,8 +1438,8 @@ export const InventoryOperations = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {velocitySegmentation.map((seg: any) => (
-                      <tr key={seg.segment} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                    {velocitySegmentation.map((seg, idx) => (
+                      <tr key={`${idx}-${seg.segment}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
                         onClick={() => toggleCrossFilter({ id: 'velocity', label: `Velocity: ${seg.segment}`, value: seg.segment })}>
                         <td className="py-2 px-2 font-medium text-gray-900">{seg.segment}</td>
                         <td className="py-2 px-2 text-right text-gray-900">{seg.skus}</td>
@@ -1504,7 +1468,7 @@ export const InventoryOperations = () => {
                   const isTotal = index === workingCapitalImpact.length - 1;
                   const isNegative = (item.item || '').includes('Excess') || (item.item || '').includes('Cost') || (item.item || '').includes('Waste') || (item.item || '').includes('Opportunity');
                   return (
-                    <div key={item.item} className={`flex items-center justify-between ${isTotal ? 'border-t-2 border-gray-300 pt-3' : ''}`}>
+                    <div key={`${index}-${item.item}`} className={`flex items-center justify-between ${isTotal ? 'border-t-2 border-gray-300 pt-3' : ''}`}>
                       <span className={`text-sm ${isTotal ? 'font-bold text-gray-900' : 'text-gray-700'}`}>{item.item}</span>
                       <span className={`text-sm font-medium ${isTotal ? 'text-red-700 font-bold' : isNegative ? 'text-red-600' : 'text-gray-900'}`}>
                         ₹{(Number(item.value) / 100000).toFixed(2)}L
@@ -1525,7 +1489,7 @@ export const InventoryOperations = () => {
           <div className="grid grid-cols-5 gap-4 mb-6">
             <KPICard title="Active Batches" value={apiBatchDetail.active_batches ? String(apiBatchDetail.active_batches) : '--'} subtitle={apiBatchDetail.total_skus ? `Across ${apiBatchDetail.total_skus} SKUs` : ''} trend={{ value: '', direction: 'up' }} icon={<Package className="w-5 h-5 text-teal-600" />} />
             <KPICard title="FIFO Compliance" value={apiBatchDetail.fifo_compliance ? `${apiBatchDetail.fifo_compliance}%` : '--'} subtitle={apiBatchDetail.non_compliant_pct ? `${apiBatchDetail.non_compliant_pct}% non-compliant` : ''} trend={{ value: '', direction: 'down' }} />
-            <KPICard title="Waste from Non-FIFO" value={apiBatchDetail.waste_from_non_fifo ? formatIndianCurrencyAbbreviated(apiBatchDetail.waste_from_non_fifo) : '--'} subtitle="This month" trend={{ value: '', direction: 'down' }} />
+            <KPICard title="Waste from Non-FIFO" value={formatIndianCurrencyAbbreviated(apiBatchDetail.waste_from_non_fifo ?? 0)} subtitle="This month" trend={{ value: '', direction: 'down' }} />
             <KPICard title="Avg Batch Margin" value={apiBatchDetail.avg_batch_margin ? `${apiBatchDetail.avg_batch_margin}%` : '--'} subtitle="Across all lots" trend={{ value: '', direction: 'up' }} />
             <KPICard title="Supplier Quality" value={apiBatchDetail.supplier_quality_score ? String(apiBatchDetail.supplier_quality_score) : '--'} subtitle="Weighted avg score" trend={{ value: '', direction: 'up' }} />
           </div>
@@ -1589,11 +1553,11 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {lotProfitability.map((item: any) => {
+                  {lotProfitability.map((item, idx) => {
                     const score = (Number(item.avgMargin) * 0.3) + (Number(item.avgTurnover) * 2) + (Number(item.qualityScore) * 0.3) - (Number(item.returnRate) * 10);
                     const rating = score >= 55 ? 'A' : score >= 45 ? 'B' : 'C';
                     return (
-                      <tr key={item.supplier} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      <tr key={`${idx}-${item.supplier}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
                         onClick={() => toggleCrossFilter({ id: 'supplier', label: `Supplier: ${item.supplier}`, value: item.supplier })}>
                         <td className="py-2 px-2 font-medium text-gray-900">{item.supplier}</td>
                         <td className="py-2 px-2 text-right text-gray-900">{item.lots}</td>
@@ -1640,10 +1604,10 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {batchAnalysis.map((batch: any) => {
+                  {batchAnalysis.map((batch, idx) => {
                     const sellThrough = batch.qtyReceived ? ((Number(batch.qtySold) / Number(batch.qtyReceived)) * 100).toFixed(1) : '0.0';
                     return (
-                      <tr key={batch.batchNo} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                      <tr key={`${idx}-${batch.batchNo}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
                         onClick={() => toggleCrossFilter({ id: 'batch', label: `Batch: ${batch.batchNo}`, value: batch.batchNo })}>
                         <td className="py-2 px-2 font-mono text-gray-600">{batch.batchNo}</td>
                         <td className="py-2 px-2 font-medium text-gray-900">{batch.product}</td>
@@ -1739,8 +1703,8 @@ export const InventoryOperations = () => {
                 <ResponsiveContainer width="100%" height={300}>
                   <ScatterChart>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis type="number" dataKey="investment" name="Investment" tick={{ fontSize: 10 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
-                    <YAxis type="number" dataKey="monthlyReturn" name="Monthly Return" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
+                    <XAxis type="number" dataKey="investment" name="Investment" tick={{ fontSize: 10 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
+                    <YAxis type="number" dataKey="monthlyReturn" name="Monthly Return" tick={{ fontSize: 12 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
                     <ZAxis type="number" dataKey="size" range={[100, 800]} />
                     <Tooltip
                       content={(props: any) => {
@@ -1821,8 +1785,8 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {investmentBySupplier.map((item: any) => (
-                    <tr key={item.supplier} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                  {investmentBySupplier.map((item, idx) => (
+                    <tr key={`${idx}-${item.supplier}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
                       onClick={() => toggleCrossFilter({ id: 'supplier', label: `Supplier: ${item.supplier}`, value: item.supplier })}>
                       <td className="py-2 px-2 font-medium text-gray-900">{item.supplier}</td>
                       <td className="py-2 px-2 text-right text-gray-900">₹{(Number(item.investment) / 100000).toFixed(2)}L</td>
@@ -1860,8 +1824,8 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {investmentByLocation.map((item: any) => (
-                    <tr key={item.location} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
+                  {investmentByLocation.map((item, idx) => (
+                    <tr key={`${idx}-${item.location}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
                       onClick={() => toggleCrossFilter({ id: 'location', label: `Location: ${item.location}`, value: item.location })}>
                       <td className="py-2 px-2 font-medium text-gray-900">{item.location}</td>
                       <td className="py-2 px-2 text-right text-gray-900">₹{(Number(item.investment) / 100000).toFixed(2)}L</td>
@@ -1885,10 +1849,10 @@ export const InventoryOperations = () => {
           <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 mb-6">
             <h3 className="text-sm font-semibold text-gray-900 mb-4">Capital Efficiency Metrics vs Industry Benchmarks</h3>
             <div className="space-y-3">
-              {capitalEfficiencyMetrics.map((item: any) => {
+              {capitalEfficiencyMetrics.map((item, idx) => {
                 const percentDiff = item.benchmark ? ((Number(item.value) - Number(item.benchmark)) / Number(item.benchmark) * 100).toFixed(1) : '0.0';
                 return (
-                  <div key={item.metric} className="flex items-center gap-4">
+                  <div key={`${idx}-${item.metric}`} className="flex items-center gap-4">
                     <div className="w-1/3 text-xs text-gray-700">{item.metric}</div>
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">

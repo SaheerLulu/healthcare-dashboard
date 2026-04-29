@@ -122,9 +122,12 @@ def overview(request):
     )
     top_margin_product = ''
     top_margin_product_growth = 0.0
+    top_margin_product_pct = 0.0
     if top_margin_row:
         top_margin_product = top_margin_row.get('product_name') or ''
         cur_r = float(top_margin_row.get('r') or 0)
+        cur_m = float(top_margin_row.get('m') or 0)
+        top_margin_product_pct = round(cur_m / cur_r * 100, 1) if cur_r else 0.0
         prev_r = float(
             prev_qs.filter(product_id=top_margin_row['product_id'])
             .aggregate(r=Sum('line_total'))['r'] or 0
@@ -170,6 +173,7 @@ def overview(request):
         'avg_basket_growth_pct': avg_basket_growth_pct,
         'margin_change_pp': margin_change_pp,
         'top_margin_product': top_margin_product,
+        'top_margin_product_pct': top_margin_product_pct,
         'top_margin_product_growth': top_margin_product_growth,
         'slow_movers_count': slow_movers_count,
     }
@@ -665,7 +669,7 @@ def detail(request):
     qs = apply_common_filters(ReportSales.objects.all(), f).order_by('-sale_date').values(
         'sale_date', 'invoice_no', 'channel', 'customer_name',
         'product_name', 'product_category', 'quantity', 'unit_price',
-        'discount_amount', 'tax_percent', 'line_total', 'payment_method',
+        'discount_amount', 'discount_percent', 'tax_percent', 'line_total', 'payment_method',
     )
 
     paginator = PageNumberPagination()

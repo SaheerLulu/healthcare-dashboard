@@ -1,11 +1,112 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bell, Search, ChevronDown, MapPin, LogOut, Settings, User } from 'lucide-react';
-import { useNavigate } from 'react-router';
+import type { CSSProperties } from 'react';
+import {
+  ChevronDown, MapPin, LogOut, Settings, User, Check,
+  BarChart3, ShoppingCart, Package, DollarSign, Store, FileText, Database,
+} from 'lucide-react';
+import { NavLink, useLocation, useNavigate } from 'react-router';
+import type { LucideIcon } from 'lucide-react';
 import { useFilters } from '../contexts/FilterContext';
 import { useApiData } from '../hooks/useApiData';
 
+interface NavGroup {
+  label: string;
+  icon: LucideIcon;
+  paths: string[];
+  items: Array<{ label: string; path: string }> | null;
+}
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: 'Dashboard',
+    icon: BarChart3,
+    paths: ['/'],
+    items: null,
+  },
+  {
+    label: 'Sales',
+    icon: ShoppingCart,
+    paths: ['/sales', '/dispatch', '/loyalty'],
+    items: [
+      { label: 'Sales Command Center', path: '/sales' },
+      { label: 'Dispatch & Fulfillment', path: '/dispatch' },
+      { label: 'Loyalty Analytics', path: '/loyalty' },
+    ],
+  },
+  {
+    label: 'Inventory',
+    icon: Package,
+    paths: ['/inventory', '/procurement', '/product'],
+    items: [
+      { label: 'Inventory Operations', path: '/inventory' },
+      { label: 'Procurement Intelligence', path: '/procurement' },
+      { label: 'Product Intelligence', path: '/product' },
+    ],
+  },
+  {
+    label: 'Financial',
+    icon: DollarSign,
+    paths: ['/financial', '/working-capital', '/gst', '/tds'],
+    items: [
+      { label: 'Financial Deep Dive', path: '/financial' },
+      { label: 'Working Capital', path: '/working-capital' },
+      { label: 'GST Compliance', path: '/gst' },
+      { label: 'TDS Tracker', path: '/tds' },
+    ],
+  },
+  {
+    label: 'Locations',
+    icon: Store,
+    paths: ['/location'],
+    items: null,
+  },
+  {
+    label: 'Reports',
+    icon: FileText,
+    paths: ['/reports/sales', '/reports/purchases', '/audit'],
+    items: [
+      { label: 'Sales Bills', path: '/reports/sales' },
+      { label: 'Purchase Bills', path: '/reports/purchases' },
+      { label: 'Audit & Data Health', path: '/audit' },
+    ],
+  },
+  {
+    label: 'Data',
+    icon: Database,
+    paths: [
+      '/detail/sales', '/detail/sales-returns', '/detail/purchase',
+      '/detail/inventory', '/detail/financial', '/detail/gst', '/detail/tds',
+    ],
+    items: [
+      { label: 'Sales Data', path: '/detail/sales' },
+      { label: 'Sales Returns', path: '/detail/sales-returns' },
+      { label: 'Purchase Data', path: '/detail/purchase' },
+      { label: 'Inventory Data', path: '/detail/inventory' },
+      { label: 'Financial Data', path: '/detail/financial' },
+      { label: 'GST Data', path: '/detail/gst' },
+      { label: 'TDS Data', path: '/detail/tds' },
+    ],
+  },
+];
+
+const activeStyle: CSSProperties = {
+  color: 'var(--brand)',
+  backgroundColor: 'rgba(15, 157, 154, 0.08)',
+};
+const inactiveStyle: CSSProperties = {
+  color: 'var(--ink-2)',
+};
+
+const ActiveIndicator = () => (
+  <span
+    className="absolute bottom-0 left-1/2 -translate-x-1/2 w-6 h-0.5 rounded-full"
+    style={{ backgroundColor: 'var(--brand)' }}
+  />
+);
+
 export const TopBar = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { filters, updateFilters } = useFilters();
   const { data: filterOptions } = useApiData<{ locations: Array<{ id: string; name: string }> }>(
     '/executive/filter-options/',
@@ -13,149 +114,313 @@ export const TopBar = () => {
     { noFilters: true }
   );
   const LOCATIONS = [{ id: '', name: 'All Locations' }, ...filterOptions.locations];
-  const [locationOpen, setLocationOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const locationRef = useRef<HTMLDivElement>(null);
-  const profileRef = useRef<HTMLDivElement>(null);
+
+  // Single source of truth for what's currently open: group label, "location", "profile", or null
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+  const navRef = useRef<HTMLElement>(null);
 
   const selectedLocation = LOCATIONS.find(
     l => filters.locations.length > 0 ? filters.locations.includes(l.id) : l.id === ''
   ) || LOCATIONS[0];
 
-  // Close dropdowns when clicking outside
+  const isGroupActive = (group: NavGroup) =>
+    group.paths.some(p => p === '/' ? location.pathname === '/' : location.pathname === p);
+
+  // Close dropdowns on outside click
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (locationRef.current && !locationRef.current.contains(e.target as Node)) setLocationOpen(false);
-      if (profileRef.current && !profileRef.current.contains(e.target as Node)) setProfileOpen(false);
+    const handleClick = (e: MouseEvent) => {
+      if (navRef.current && !navRef.current.contains(e.target as Node)) {
+        setOpenDropdown(null);
+      }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
   }, []);
+
+  // Close on Escape
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenDropdown(null);
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, []);
+
+  // Close any open dropdown when route changes
+  useEffect(() => {
+    setOpenDropdown(null);
+  }, [location.pathname]);
 
   const handleLocationSelect = (id: string) => {
     updateFilters({ locations: id ? [id] : [] });
-    setLocationOpen(false);
+    setOpenDropdown(null);
   };
 
+  const handleGroupClick = (group: NavGroup) => {
+    if (!group.items) {
+      navigate(group.paths[0]);
+      setOpenDropdown(null);
+      return;
+    }
+    setOpenDropdown(openDropdown === group.label ? null : group.label);
+  };
+
+  const tabClass =
+    'relative flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg whitespace-nowrap transition-colors';
+
   return (
-    <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
-      <div className="h-16 px-6 flex items-center justify-between">
-        {/* Logo */}
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-teal-600 rounded flex items-center justify-center">
-              <span className="text-white font-bold text-sm">HP</span>
-            </div>
-            <div>
-              <div className="font-bold text-gray-900">HealPro</div>
-              <div className="text-xs text-gray-500">Chemist+</div>
-            </div>
-          </div>
+    <header
+      ref={navRef}
+      className="h-16 backdrop-blur-lg border-b sticky top-0 z-50 flex items-center px-4"
+      style={{ backgroundColor: 'var(--color-nav-bg)', borderColor: 'var(--color-nav-border)' }}
+    >
+      {/* seefmed wordmark */}
+      <div className="flex items-center mr-4 flex-shrink-0" aria-label="seefmed" title="seefmed">
+        <span
+          style={{
+            fontFamily: 'Inter, system-ui, sans-serif',
+            fontWeight: 700,
+            fontSize: 20,
+            letterSpacing: '-0.04em',
+            lineHeight: 1,
+            color: 'var(--ink)',
+            display: 'inline-flex',
+            alignItems: 'baseline',
+          }}
+        >
+          seef<span style={{ color: 'var(--brand)' }}>med</span>
+          <span style={{ color: 'var(--brand)' }}>.</span>
+        </span>
+      </div>
 
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search..."
-              className="w-80 pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm"
-            />
-          </div>
+      {/* Grouped menu strip — flex-1 so it occupies the middle of the bar.
+          NOTE: overflow-x-auto would clip the dropdown popovers (CSS auto-
+          promotes overflow-y to non-visible when overflow-x is set). */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1">
+          {NAV_GROUPS.map((group) => {
+            const active = isGroupActive(group);
+            const isOpen = openDropdown === group.label;
+            const hasSubs = !!group.items;
+
+            // Single-item group → direct NavLink with active indicator
+            if (!hasSubs) {
+              return (
+                <NavLink
+                  key={group.label}
+                  to={group.paths[0]}
+                  end={group.paths[0] === '/'}
+                  className={tabClass}
+                  style={({ isActive }) => (isActive ? activeStyle : inactiveStyle)}
+                >
+                  {({ isActive }) => (
+                    <>
+                      <group.icon className="w-4 h-4 flex-shrink-0" />
+                      <span>{group.label}</span>
+                      {isActive && <ActiveIndicator />}
+                    </>
+                  )}
+                </NavLink>
+              );
+            }
+
+            // Multi-item group → dropdown trigger
+            return (
+              <div key={group.label} className="relative">
+                <button
+                  onClick={() => handleGroupClick(group)}
+                  className={tabClass}
+                  style={active ? activeStyle : inactiveStyle}
+                  onMouseEnter={(e) => {
+                    if (!active) e.currentTarget.style.backgroundColor = 'var(--color-hover-bg)';
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!active) e.currentTarget.style.backgroundColor = '';
+                  }}
+                >
+                  <group.icon className="w-4 h-4 flex-shrink-0" />
+                  <span>{group.label}</span>
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+                  />
+                  {active && <ActiveIndicator />}
+                </button>
+
+                {isOpen && group.items && (
+                  <div
+                    className="absolute top-full left-0 mt-1 w-56 rounded-lg shadow-lg z-50 overflow-hidden dropdown-animate"
+                    style={{
+                      backgroundColor: 'var(--color-dropdown-bg)',
+                      border: '1px solid var(--line)',
+                    }}
+                  >
+                    {group.items.map((item) => (
+                      <NavLink
+                        key={item.path}
+                        to={item.path}
+                        className="block px-4 py-2 text-xs transition-all"
+                        style={({ isActive }) =>
+                          isActive
+                            ? { color: 'var(--brand)', backgroundColor: 'rgba(15, 157, 154, 0.08)', fontWeight: 500 }
+                            : { color: 'var(--ink)' }
+                        }
+                      >
+                        {item.label}
+                      </NavLink>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
+      </div>
 
-        {/* Right Side */}
-        <div className="flex items-center gap-3">
-          {/* Location Selector Dropdown */}
-          <div className="relative" ref={locationRef}>
-            <button
-              onClick={() => { setLocationOpen(!locationOpen); setProfileOpen(false); }}
-              className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium transition-colors ${
-                locationOpen
-                  ? 'border-teal-500 bg-teal-50 text-teal-700 ring-2 ring-teal-200'
-                  : 'border-gray-300 hover:bg-gray-50 text-gray-700'
-              }`}
+      {/* Right-side controls */}
+      <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+        {/* Location Selector */}
+        <div className="relative">
+          <button
+            onClick={() => setOpenDropdown(openDropdown === 'location' ? null : 'location')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors"
+            style={
+              openDropdown === 'location'
+                ? {
+                    color: 'var(--brand)',
+                    backgroundColor: 'rgba(15, 157, 154, 0.08)',
+                    borderColor: 'var(--brand)',
+                  }
+                : {
+                    color: 'var(--ink)',
+                    backgroundColor: 'var(--surface-0)',
+                    borderColor: 'var(--line)',
+                  }
+            }
+          >
+            <MapPin className="w-3.5 h-3.5" style={{ color: 'var(--brand)' }} />
+            <span className="max-w-[120px] truncate">{selectedLocation.name}</span>
+            <ChevronDown
+              className={`w-3.5 h-3.5 transition-transform ${openDropdown === 'location' ? 'rotate-180' : ''}`}
+              style={{ color: 'var(--ink-3)' }}
+            />
+          </button>
+
+          {openDropdown === 'location' && (
+            <div
+              className="absolute right-0 mt-2 w-64 rounded-xl shadow-xl overflow-hidden z-50 dropdown-animate"
+              style={{
+                backgroundColor: 'var(--color-dropdown-bg)',
+                border: '1px solid var(--line)',
+              }}
             >
-              <MapPin className="w-4 h-4 text-teal-600" />
-              <span className="max-w-[140px] truncate">{selectedLocation.name}</span>
-              <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${locationOpen ? 'rotate-180' : ''}`} />
-            </button>
-
-            {locationOpen && (
-              <div className="absolute right-0 mt-2 w-64 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150">
-                <div className="px-3 py-2.5 border-b border-gray-100 bg-gray-50">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Select Location</p>
-                </div>
-                <div className="py-1 max-h-64 overflow-y-auto">
-                  {LOCATIONS.map(loc => (
+              <div
+                className="px-4 py-2.5"
+                style={{ borderBottom: '1px solid var(--line)', backgroundColor: 'var(--surface-1)' }}
+              >
+                <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--ink-3)' }}>
+                  Select Location
+                </p>
+              </div>
+              <div className="py-1 max-h-64 overflow-y-auto">
+                {LOCATIONS.map(loc => {
+                  const active = selectedLocation.id === loc.id;
+                  return (
                     <button
                       key={loc.id}
                       onClick={() => handleLocationSelect(loc.id)}
-                      className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
-                        selectedLocation.id === loc.id
-                          ? 'bg-teal-50 text-teal-700 font-medium'
-                          : 'text-gray-700 hover:bg-gray-50'
-                      }`}
+                      className="w-full flex items-center justify-between gap-3 px-4 py-2 text-sm transition-all"
+                      style={
+                        active
+                          ? { color: 'var(--brand)', backgroundColor: 'rgba(15, 157, 154, 0.08)', fontWeight: 500 }
+                          : { color: 'var(--ink)' }
+                      }
+                      onMouseEnter={(e) => {
+                        if (!active) e.currentTarget.style.backgroundColor = 'var(--color-hover-bg)';
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!active) e.currentTarget.style.backgroundColor = '';
+                      }}
                     >
-                      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                        selectedLocation.id === loc.id ? 'bg-teal-500' : 'bg-gray-300'
-                      }`} />
                       <span>{loc.name}</span>
-                      {selectedLocation.id === loc.id && (
-                        <span className="ml-auto text-teal-500 text-xs font-semibold">Active</span>
-                      )}
+                      {active && <Check className="w-4 h-4" style={{ color: 'var(--brand)' }} />}
                     </button>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
-            )}
-          </div>
+            </div>
+          )}
+        </div>
 
-          {/* Notifications */}
-          <button className="relative p-2 hover:bg-gray-100 rounded-lg transition-colors">
-            <Bell className="w-5 h-5 text-gray-600" />
-            <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+        {/* Profile */}
+        <div className="relative">
+          <button
+            onClick={() => setOpenDropdown(openDropdown === 'profile' ? null : 'profile')}
+            className="flex items-center gap-2 p-1.5 rounded-lg transition-colors"
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--color-hover-bg)'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = ''}
+          >
+            <div
+              className="w-7 h-7 rounded-full flex items-center justify-center"
+              style={{ backgroundColor: 'var(--brand)' }}
+            >
+              <User className="w-3.5 h-3.5 text-white" />
+            </div>
+            <div className="text-left hidden lg:block">
+              <p className="text-xs font-medium leading-tight" style={{ color: 'var(--ink)' }}>Admin</p>
+              <p className="text-[10px] leading-tight" style={{ color: 'var(--ink-3)' }}>Administrator</p>
+            </div>
+            <ChevronDown
+              className={`w-3.5 h-3.5 hidden lg:block transition-transform ${openDropdown === 'profile' ? 'rotate-180' : ''}`}
+              style={{ color: 'var(--ink-3)' }}
+            />
           </button>
 
-          {/* User Profile Dropdown */}
-          <div className="relative" ref={profileRef}>
-            <button
-              onClick={() => { setProfileOpen(!profileOpen); setLocationOpen(false); }}
-              className={`flex items-center gap-2 p-2 rounded-lg transition-colors ${
-                profileOpen ? 'bg-gray-100' : 'hover:bg-gray-50'
-              }`}
+          {openDropdown === 'profile' && (
+            <div
+              className="absolute right-0 mt-2 w-56 rounded-xl shadow-xl overflow-hidden z-50 dropdown-animate"
+              style={{
+                backgroundColor: 'var(--color-dropdown-bg)',
+                border: '1px solid var(--line)',
+              }}
             >
-              <div className="w-8 h-8 bg-teal-600 rounded-full flex items-center justify-center text-white font-medium">
-                A
+              <div
+                className="p-4"
+                style={{ borderBottom: '1px solid var(--line)', backgroundColor: 'var(--surface-1)' }}
+              >
+                <p className="text-sm font-medium" style={{ color: 'var(--ink)' }}>Admin User</p>
+                <p className="text-xs" style={{ color: 'var(--ink-3)' }}>admin@biloop.ai</p>
+                <span
+                  className="inline-block mt-2 px-2 py-0.5 text-xs rounded-full"
+                  style={{ backgroundColor: 'rgba(15, 157, 154, 0.12)', color: 'var(--brand-press)' }}
+                >
+                  Administrator
+                </span>
               </div>
-              <span className="text-sm font-medium text-gray-700">Admin</span>
-              <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${profileOpen ? 'rotate-180' : ''}`} />
-            </button>
-
-            {profileOpen && (
-              <div className="absolute right-0 mt-2 w-52 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150">
-                <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
-                  <p className="text-sm font-semibold text-gray-900">Admin User</p>
-                  <p className="text-xs text-gray-500">admin@healpro.in</p>
-                </div>
-                <div className="py-1">
-                  <button onClick={() => { navigate('/settings'); setProfileOpen(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
-                    <Settings className="w-4 h-4 text-gray-400" />
-                    Settings
-                  </button>
-                  <button onClick={() => { navigate('/settings'); setProfileOpen(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
-                    <User className="w-4 h-4 text-gray-400" />
-                    Profile
-                  </button>
-                </div>
-                <div className="border-t border-gray-100">
-                  <button className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors">
-                    <LogOut className="w-4 h-4" />
-                    Sign Out
-                  </button>
-                </div>
+              <div className="py-2">
+                <button
+                  onClick={() => { navigate('/settings'); setOpenDropdown(null); }}
+                  className="w-full px-4 py-2.5 text-left text-sm transition-all flex items-center gap-3"
+                  style={{ color: 'var(--ink)' }}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--color-hover-bg)'}
+                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = ''}
+                >
+                  <Settings className="w-4 h-4" style={{ color: 'var(--ink-3)' }} />
+                  Settings
+                </button>
               </div>
-            )}
-          </div>
+              <div style={{ borderTop: '1px solid var(--line)' }} className="py-2">
+                <button
+                  className="w-full px-4 py-2.5 text-left text-sm transition-all flex items-center gap-3"
+                  style={{ color: 'var(--danger)' }}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(192, 57, 43, 0.08)'}
+                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = ''}
+                >
+                  <LogOut className="w-4 h-4" />
+                  Sign Out
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </header>

@@ -61,19 +61,34 @@ export function toCategoryPie(data: any[]): any[] {
   }));
 }
 
-/** Transform top products from API to chart shape */
+/** Transform top products from API to chart shape.
+ * margin = percentage (0–100), profit = absolute rupees.
+ * The backend `top_products` endpoint annotates `margin = Sum(gross_margin)` in
+ * rupees, NOT a percentage — so if no explicit `*_pct` field is present, we
+ * compute the percentage from revenue + absolute margin. */
 export function toTopProducts(data: any[]): any[] {
-  return data.map(r => ({
-    name: r.product_name || r.name || '',
-    qty: Number(r.qty || r.quantity) || 0,
-    revenue: Number(r.revenue) || 0,
-    margin: Number(r.avg_margin_pct || r.margin_percent || r.margin) || 0,
-    cost: Number(r.cost) || 0,
-    profit: Number(r.margin || r.profit) || 0,
-    category: r.product_category || r.category || '',
-    growth: Number(r.growth) || 0,
-    ...numericize(r),
-  }));
+  return data.map(r => {
+    const revenue = Number(r.revenue) || 0;
+    const profit = Number(r.profit ?? r.margin) || 0;
+    const explicitPct = r.avg_margin_pct ?? r.margin_percent ?? r.margin_pct;
+    const marginPct = explicitPct !== undefined && explicitPct !== null
+      ? Number(explicitPct)
+      : (revenue > 0 ? (profit / revenue) * 100 : 0);
+    return {
+      // Spread numericize FIRST so the explicit fields below override; the
+      // backend returns `margin = Sum(gross_margin)` in rupees and spreading
+      // it last had the rupee value clobber our computed percentage.
+      ...numericize(r),
+      name: r.product_name || r.name || '',
+      qty: Number(r.qty || r.quantity) || 0,
+      revenue,
+      margin: Number(marginPct.toFixed(2)),
+      cost: Number(r.cost) || 0,
+      profit,
+      category: r.product_category || r.category || '',
+      growth: Number(r.growth) || 0,
+    };
+  });
 }
 
 /** Transform payment mix from API [{payment_method, revenue, orders}] to [{name, value, count}] */

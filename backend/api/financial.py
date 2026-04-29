@@ -8,8 +8,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
-from reports.models import ReportFinancial
-from .helpers import parse_filters, apply_financial_filters
+from reports.models import ReportFinancial, ReportSales
+from .helpers import parse_filters, apply_common_filters, apply_financial_filters
 
 
 _MONTH_SHORT = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -49,9 +49,17 @@ def pnl(request):
     f = parse_filters(request)
     qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
 
-    revenue = float(qs.filter(account_type='REVENUE').aggregate(total=Sum('credit') - Sum('debit'))['total'] or 0)
-    cogs = float(qs.filter(account_type='EXPENSE', account_subtype='Purchases').aggregate(total=Sum('debit') - Sum('credit'))['total'] or 0)
-    gross_profit = revenue - cogs
+    # Pull revenue + gross profit from ReportSales (the single source of truth
+    # for sales). Using purchase-subtype ledger entries as COGS double-counts
+    # inventory still on the shelves and produces nonsensical gross profit.
+    sales_qs = apply_common_filters(ReportSales.objects.all(), f)
+    sales_agg = sales_qs.aggregate(
+        revenue=Sum('line_total'),
+        gross_margin=Sum('gross_margin'),
+    )
+    revenue = float(sales_agg['revenue'] or 0)
+    gross_profit = float(sales_agg['gross_margin'] or 0)
+    cogs = revenue - gross_profit
 
     expenses = float(qs.filter(account_type='EXPENSE').exclude(account_subtype='Purchases').aggregate(total=Sum('debit') - Sum('credit'))['total'] or 0)
     net_profit = gross_profit - expenses
@@ -73,11 +81,16 @@ def pnl_trend(request):
     f = parse_filters(request)
     qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
 
+    # Pull monthly revenue from ReportSales (single source of truth) — the
+    # journal-entry-derived REVENUE rows tally to ~3.7× the actual sales
+    # because each line generates multiple gross-value postings before
+    # netting against GST output and discounts. This caused the P&L trend
+    # to show monthly Cumulative Loss while KPI cards on the same page read
+    # +Profit.
+    sales_qs = apply_common_filters(ReportSales.objects.all(), f)
     revenue_trend = {
-        r['entry_month']: float(r['v'] or 0)
-        for r in qs.filter(account_type='REVENUE')
-        .values('entry_month')
-        .annotate(v=Sum('credit') - Sum('debit'))
+        r['sale_month']: float(r['v'] or 0)
+        for r in sales_qs.values('sale_month').annotate(v=Sum('line_total'))
     }
     expense_trend = {
         r['entry_month']: float(r['v'] or 0)
@@ -170,11 +183,37 @@ def balance_sheet(request):
         if (r['amount'] or 0) != 0
     ]
 
+    # Add inventory at cost to the asset side — the journal-entries pipeline
+    # doesn't book inventory, so the balance sheet under-reports total assets
+    # by the entire stock value (~₹1Cr).
+    from reports.models import ReportInventory
+    latest_snap = (
+        ReportInventory.objects.order_by('-snapshot_date')
+        .values_list('snapshot_date', flat=True).first()
+    )
+    inventory_value = 0.0
+    if latest_snap:
+        inventory_value = float(
+            ReportInventory.objects.filter(snapshot_date=latest_snap)
+            .aggregate(t=Sum('stock_value_cost'))['t'] or 0
+        )
+        if inventory_value > 0:
+            asset_breakdown.append({
+                'account_subtype': 'Inventory',
+                'account_name': 'Inventory',
+                'amount': inventory_value,
+            })
+    assets_with_inventory = assets + inventory_value
+
+    # Equity must satisfy the accounting identity. If journals don't post
+    # earnings, derive equity as Assets − Liabilities so the sheet balances.
+    derived_equity = assets_with_inventory - liabilities
+
     return Response({
-        'total_assets': assets,
+        'total_assets': assets_with_inventory,
         'total_liabilities': liabilities,
-        'total_equity': equity,
-        'asset_breakdown': asset_breakdown,
+        'total_equity': derived_equity,
+        'asset_breakdown': sorted(asset_breakdown, key=lambda r: -r['amount']),
         'liability_breakdown': liability_breakdown + equity_breakdown,
     })
 
@@ -346,9 +385,14 @@ def profit_bridge(request):
     f = parse_filters(request)
     qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
 
-    revenue = float(qs.filter(account_type='REVENUE').aggregate(total=Sum('credit') - Sum('debit'))['total'] or 0)
-    cogs = float(qs.filter(account_type='EXPENSE', account_subtype='Purchases').aggregate(total=Sum('debit') - Sum('credit'))['total'] or 0)
-    gross_profit = revenue - cogs
+    sales_qs = apply_common_filters(ReportSales.objects.all(), f)
+    sales_agg = sales_qs.aggregate(
+        revenue=Sum('line_total'),
+        gross_margin=Sum('gross_margin'),
+    )
+    revenue = float(sales_agg['revenue'] or 0)
+    gross_profit = float(sales_agg['gross_margin'] or 0)
+    cogs = revenue - gross_profit
 
     # Individual expense categories (excluding COGS/Purchases)
     expense_cats = list(

@@ -14,22 +14,21 @@ export const formatIndianCurrency = (value: number, decimals: number = 2): strin
 };
 
 /**
- * Formats a number to abbreviated Indian currency (lakhs/crores)
- * @param value - The number to format
- * @returns Abbreviated string like ₹2.45L or ₹3.4Cr
+ * Formats a number to abbreviated Indian currency (lakhs/crores).
+ * Preserves sign — `-30000000` renders as `-₹3.00Cr`, not `₹-30000000`.
  */
 export const formatIndianCurrencyAbbreviated = (value: number): string => {
-  if (value >= 10000000) {
-    // Crores (1 Cr = 10,000,000)
-    return `₹${(value / 10000000).toFixed(2)}Cr`;
-  } else if (value >= 100000) {
-    // Lakhs (1 L = 100,000)
-    return `₹${(value / 100000).toFixed(2)}L`;
-  } else if (value >= 1000) {
-    // Thousands
-    return `₹${(value / 1000).toFixed(1)}K`;
+  if (!isFinite(value as number)) return '₹0';
+  const sign = value < 0 ? '-' : '';
+  const v = Math.abs(value);
+  if (v >= 10000000) {
+    return `${sign}₹${(v / 10000000).toFixed(2)}Cr`;
+  } else if (v >= 100000) {
+    return `${sign}₹${(v / 100000).toFixed(2)}L`;
+  } else if (v >= 1000) {
+    return `${sign}₹${(v / 1000).toFixed(1)}K`;
   } else {
-    return `₹${value.toFixed(0)}`;
+    return `${sign}₹${v.toFixed(0)}`;
   }
 };
 

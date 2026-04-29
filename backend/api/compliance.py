@@ -21,10 +21,17 @@ def gst_overview(request):
 
     gstr3b = ReportGST.objects.filter(source_table='gstr3b', period__gte=start_period, period__lte=end_period)
     gstr1 = ReportGST.objects.filter(source_table='gstr1', period__gte=start_period, period__lte=end_period)
+    gstr2b = ReportGST.objects.filter(source_table='gstr2b', period__gte=start_period, period__lte=end_period)
 
     output_gst = float(gstr1.aggregate(total=Sum('cgst') + Sum('sgst') + Sum('igst'))['total'] or 0)
-    itc = float(gstr3b.aggregate(total=Sum('itc_cgst') + Sum('itc_sgst') + Sum('itc_igst'))['total'] or 0)
-    net_liability = float(gstr3b.aggregate(total=Sum('net_payable_cgst') + Sum('net_payable_sgst') + Sum('net_payable_igst'))['total'] or 0)
+    # Prefer the consolidated gstr3b summary; fall back to gstr2b for ITC and
+    # gstr1 - gstr2b for net liability when 3B is sparse (gstr3b is monthly
+    # and often only filed for closed periods).
+    itc_3b = float(gstr3b.aggregate(total=Sum('itc_cgst') + Sum('itc_sgst') + Sum('itc_igst'))['total'] or 0)
+    itc_2b = float(gstr2b.aggregate(total=Sum('cgst') + Sum('sgst') + Sum('igst'))['total'] or 0)
+    itc = itc_3b if itc_3b else itc_2b
+    net_liability_3b = float(gstr3b.aggregate(total=Sum('net_payable_cgst') + Sum('net_payable_sgst') + Sum('net_payable_igst'))['total'] or 0)
+    net_liability = net_liability_3b if net_liability_3b else max(output_gst - itc, 0)
     filings_pending = gstr3b.filter(filing_status='draft').count()
 
     return Response({
@@ -145,8 +152,15 @@ def gst_detail(request):
     )
 
     paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    return paginator.get_paginated_response(list(page) if page else [])
+    page = paginator.paginate_queryset(qs, request) or []
+    rows = list(page)
+    # Fill in invoice_type for rows that don't carry one (gstr2b/gstr3b),
+    # using the source table as a friendly label.
+    table_label = {'gstr1': 'Outward', 'gstr2b': 'Inward', 'gstr3b': 'Summary'}
+    for r in rows:
+        if not r.get('invoice_type'):
+            r['invoice_type'] = table_label.get(r.get('source_table'), '—')
+    return paginator.get_paginated_response(rows)
 
 
 @api_view(['GET'])

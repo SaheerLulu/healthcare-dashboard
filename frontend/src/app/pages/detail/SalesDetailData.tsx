@@ -14,7 +14,17 @@ export const SalesDetailData = () => {
   const salesRows = (apiSalesDetail.results || []).map((r: any) => ({
     date: r.sale_date || '', invoice: r.invoice_no || '', channel: r.channel || '',
     customer: r.customer_name || '', product: r.product_name || '', category: r.product_category || '',
-    qty: r.quantity || 0, price: Number(r.unit_price) || 0, discount: Number(r.discount_amount) || 0,
+    qty: r.quantity || 0, price: Number(r.unit_price) || 0,
+    // discount column displays a percentage; derive from discount_amount /
+    // gross (price × qty), capped at 100. Was showing the rupee discount as
+    // a percent which gave nonsensical 122%, 257% values.
+    discount: (() => {
+      const explicit = Number(r.discount_percent);
+      if (!isNaN(explicit) && explicit > 0) return Math.min(100, explicit);
+      const amt = Number(r.discount_amount) || 0;
+      const gross = (Number(r.unit_price) || 0) * (Number(r.quantity) || 0);
+      return gross > 0 ? Math.min(100, Number(((amt / gross) * 100).toFixed(2))) : 0;
+    })(),
     tax: Number(r.tax_percent) || 0, total: Number(r.line_total) || 0, payment: r.payment_method || '',
   }));
 
@@ -83,19 +93,19 @@ export const SalesDetailData = () => {
       )}
 
       {/* Page Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Sales Detail Data</h1>
+      <div className="flex items-center justify-between mb-6 gap-4">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-2xl font-bold text-gray-900 truncate">Sales Detail Data</h1>
           <p className="text-sm text-gray-600 mt-1">
             Showing {salesRows.length} transactions | Total: ₹{salesRows.reduce((sum, item) => sum + item.total, 0).toFixed(2)}
           </p>
         </div>
-        <div className="flex gap-2">
-          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+        <div className="flex gap-2 flex-shrink-0">
+          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap">
             <Download className="w-4 h-4 inline mr-2" />
             Export CSV
           </button>
-          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap">
             <Download className="w-4 h-4 inline mr-2" />
             Export Excel
           </button>

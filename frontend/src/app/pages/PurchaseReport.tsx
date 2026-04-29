@@ -173,7 +173,7 @@ export const PurchaseReport = () => {
   return (
     <div>
       {/* Page Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-4">
         <div>
           <div className="flex items-center gap-3 mb-1">
             <FileText className="w-6 h-6 text-orange-600" />

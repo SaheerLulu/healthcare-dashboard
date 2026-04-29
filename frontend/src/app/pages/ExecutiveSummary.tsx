@@ -126,35 +126,26 @@ export const ExecutiveSummary = () => {
         </div>
       </div>
 
-      {/* Story Insights Banner */}
-      {kpis.gross_profit > 0 && (
-      <div className="bg-gradient-to-r from-teal-50 via-white to-indigo-50 rounded-lg border border-teal-200 p-4 mb-6">
-        <div className="flex items-center gap-2 mb-3">
-          <div className="w-2 h-2 rounded-full bg-teal-500 animate-pulse" />
-          <h3 className="text-sm font-semibold text-gray-900">Business Summary</h3>
-          <span className="text-xs text-gray-500 ml-auto">Key financial metrics</span>
-        </div>
-        <div className="grid grid-cols-3 gap-4">
-          <div className="bg-white rounded-lg p-3 border border-gray-100">
-            <div className="text-xs text-gray-500 mb-1">Gross Profit</div>
-            <div className="text-xl font-bold text-gray-900">{formatIndianCurrencyAbbreviated(kpis.gross_profit)}</div>
-          </div>
-          <div className="bg-white rounded-lg p-3 border border-gray-100">
-            <div className="text-xs text-gray-500 mb-1">Total Revenue</div>
-            <div className="text-xl font-bold text-gray-900">{formatIndianCurrencyAbbreviated(kpis.total_revenue)}</div>
-          </div>
-          <div className="bg-white rounded-lg p-3 border border-gray-100">
-            <div className="text-xs text-gray-500 mb-1">Cash Position</div>
-            <div className="text-xl font-bold text-gray-900">{formatIndianCurrencyAbbreviated(kpis.cash_position)}</div>
-          </div>
-        </div>
-      </div>
-      )}
-
       {/* KPI Cards Row */}
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <KPICard title="Total Revenue" value={formatIndianCurrencyAbbreviated(kpis.total_revenue)} onClick={() => handleDrillThrough('/detail/sales')} />
-        <KPICard title="Gross Profit" value={formatIndianCurrencyAbbreviated(kpis.gross_profit)} onClick={() => handleDrillThrough('/detail/financial')} />
+        <KPICard
+          title="Total Revenue"
+          value={formatIndianCurrencyAbbreviated(kpis.total_revenue)}
+          trend={(() => {
+            const d = Number(kpis.revenue_delta_pct) || 0;
+            return d ? { value: `${d > 0 ? '+' : ''}${d.toFixed(1)}%`, direction: (d >= 0 ? 'up' : 'down') as 'up' | 'down' } : undefined;
+          })()}
+          onClick={() => handleDrillThrough('/detail/sales')}
+        />
+        <KPICard
+          title="Gross Profit"
+          value={formatIndianCurrencyAbbreviated(kpis.gross_profit)}
+          trend={(() => {
+            const d = Number(kpis.gross_profit_delta_pct) || 0;
+            return d ? { value: `${d > 0 ? '+' : ''}${d.toFixed(1)}%`, direction: (d >= 0 ? 'up' : 'down') as 'up' | 'down' } : undefined;
+          })()}
+          onClick={() => handleDrillThrough('/detail/financial')}
+        />
         <KPICard title="Cash Position" value={formatIndianCurrencyAbbreviated(kpis.cash_position)} onClick={() => handleDrillThrough('/detail/financial')} />
         <KPICard title="GST Liability" value={formatIndianCurrencyAbbreviated(kpis.gst_liability)} onClick={() => handleDrillThrough('/detail/gst')} />
       </div>
@@ -265,7 +256,7 @@ export const ExecutiveSummary = () => {
                 >
                   <div className="flex-1">
                     <div className="text-xs font-medium text-gray-900">{product.name}</div>
-                    <div className="text-xs text-gray-500">Qty: {product.qty.toLocaleString('en-IN')}</div>
+                    <div className="text-xs text-gray-500">Qty: {(Number(product?.qty ?? 0)).toLocaleString('en-IN')}</div>
                   </div>
                   <div className="text-right">
                     <div className="text-xs font-bold text-gray-900">{formatIndianCurrencyAbbreviated(product.revenue)}</div>

@@ -12,6 +12,19 @@ from reports.models import ReportInventory, ReportSales, ReportPurchases
 from .helpers import parse_filters
 
 
+def _fmt_inr(value):
+    """Abbreviated rupee format used in display strings (e.g. ₹1.62L)."""
+    sign = '-' if value < 0 else ''
+    v = abs(value)
+    if v >= 10000000:
+        return f'{sign}₹{v / 10000000:.2f}Cr'
+    if v >= 100000:
+        return f'{sign}₹{v / 100000:.2f}L'
+    if v >= 1000:
+        return f'{sign}₹{v / 1000:.1f}K'
+    return f'{sign}₹{int(v)}'
+
+
 HOLDING_RATE = 0.25  # Annual inventory carrying rate (industry standard)
 COST_COMPONENTS = {
     'storage': 0.07,
@@ -353,13 +366,18 @@ def dead_stock(request):
     )
     for r in data:
         days = int(r.get('days_since_last_sale') or 0)
+        # Pipeline uses 9999 as a sentinel for "never sold" — treat any
+        # absurdly large days-since-last-sale as never-sold.
+        never_sold = days >= 9999 or days <= 0
         r['product'] = r.get('product_name') or ''
         r['qty'] = int(r.get('qty_on_hand') or 0)
         r['value'] = float(r.get('stock_value_cost') or 0)
-        r['lastSold'] = f"{days}d ago" if days else 'Never'
+        r['lastSold'] = 'Never' if never_sold else f"{days}d ago"
         r['last_sold'] = r['lastSold']
         r['category'] = r.get('product_category') or 'Uncategorized'
-        if days >= 180:
+        if never_sold:
+            r['reason'] = "No sales recorded — discontinue"
+        elif days >= 180:
             r['reason'] = f"No sales in {days}d — discontinue"
         elif days >= 90:
             r['reason'] = f"Slow-moving {days}d — liquidate"
@@ -707,24 +725,30 @@ def stock_alerts(request):
     for a in alerts:
         qty = int(a.get('qty_on_hand') or 0)
         dos = int(a.get('days_of_stock') or 0)
+        ss = float(a.get('safety_stock') or 0)
         if qty == 0:
             a['status'] = 'stockout'
             a['alert_type'] = 'stockout'
         elif a.get('expiry_status') in ('expired', 'critical_30'):
             a['status'] = 'low'
             a['alert_type'] = 'expiry'
-        elif a.get('reorder_needed'):
+        elif a.get('reorder_needed') or qty <= ss:
             a['status'] = 'low'
             a['alert_type'] = 'reorder'
-        elif 0 < dos < 9999 and dos > 180:
+        elif 0 < dos < 9999 and dos > 365:
+            # Only flag as overstock when there's >1 year of stock — 180 days
+            # was too aggressive and lit up nearly every row.
             a['status'] = 'overstock'
             a['alert_type'] = 'overstock'
         else:
-            a['status'] = 'low'
-            a['alert_type'] = 'reorder'
+            a['status'] = 'ok'
+            a['alert_type'] = 'ok'
         a['product'] = a.get('product_name') or ''
         a['qty'] = qty
-        a['reorder_level'] = float(a.get('safety_stock') or 0)
+        # Round safety_stock up to a whole-unit reorder level — fractional
+        # reorder thresholds (0.31, 1.24, 2.1) don't make sense for SKUs.
+        from math import ceil
+        a['reorder_level'] = max(1, ceil(ss)) if ss else 0
         a['reorder'] = a['reorder_level']
         last = a.get('last_sale_date')
         a['last_sale'] = last.isoformat() if last else ''
@@ -882,7 +906,7 @@ def optimization(request):
                 'targetDays': target_days,
                 'potentialSaving': potential_saving,
                 'priority': priority,
-                'impact': f"Free ₹{int(inv * 0.3):,} capital",
+                'impact': f"Free {_fmt_inr(int(inv * 0.3))} capital",
             })
         elif monthly_sales > 0 and dos > 0 and dos < 15:
             # Understock: recommend replenishment

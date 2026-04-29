@@ -6,7 +6,10 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from reports.models import ReportSales, ReportFinancial, ReportGST, ReportInventory, ReportPurchases
-from .helpers import parse_filters, apply_common_filters, apply_financial_filters
+from .helpers import (
+    parse_filters, apply_common_filters, apply_financial_filters,
+    apply_common_filters_range, prior_period_range, growth_pct,
+)
 
 
 @api_view(['GET'])
@@ -16,14 +19,16 @@ def kpis(request):
     sales_qs = apply_common_filters(ReportSales.objects.all(), f)
     fin_qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
 
-    revenue = sales_qs.aggregate(total=Sum('line_total'))['total'] or 0
-
-    # Gross profit: revenue - COGS (from expense accounts)
-    cogs = fin_qs.filter(account_type='EXPENSE', account_subtype='Purchases').aggregate(
-        total=Sum('debit') - Sum('credit')
+    sales_agg = sales_qs.aggregate(
+        revenue=Sum('line_total'),
+        gross_margin=Sum('gross_margin'),
     )
-    cogs_val = cogs['total'] or 0
-    gross_profit = Decimal(str(revenue)) - Decimal(str(cogs_val))
+    revenue = sales_agg['revenue'] or 0
+    # Gross profit = sum of per-line (line_total - line_cost), already
+    # computed in the pipeline as `gross_margin` per ReportSales row.
+    # NOTE: do NOT use total purchases as COGS — purchases-in-period is
+    # cash flow, not cost-of-goods-sold for revenue earned in the same period.
+    gross_profit = sales_agg['gross_margin'] or 0
 
     # Cash position
     cash = fin_qs.filter(account_subtype__in=['Cash', 'Bank']).aggregate(
@@ -36,11 +41,23 @@ def kpis(request):
         total=Sum('net_payable_cgst') + Sum('net_payable_sgst') + Sum('net_payable_igst')
     )['total'] or 0
 
+    # Prior-period comparison (same-duration window ending day before start)
+    prev_start, prev_end = prior_period_range(f)
+    prev_sales_qs = apply_common_filters_range(ReportSales.objects.all(), f, prev_start, prev_end)
+    prev_sales_agg = prev_sales_qs.aggregate(
+        revenue=Sum('line_total'),
+        gross_margin=Sum('gross_margin'),
+    )
+    revenue_delta = growth_pct(revenue, prev_sales_agg['revenue'])
+    profit_delta = growth_pct(gross_profit, prev_sales_agg['gross_margin'])
+
     return Response({
         'total_revenue': float(revenue),
         'gross_profit': float(gross_profit),
         'cash_position': float(cash),
         'gst_liability': float(gst_liability),
+        'revenue_delta_pct': revenue_delta,
+        'gross_profit_delta_pct': profit_delta,
     })
 
 
