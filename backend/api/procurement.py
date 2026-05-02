@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
 from reports.models import ReportPurchases
+from source_models.models import PurchaseOrderRO, PurchaseOrderLineRO
 from .helpers import parse_filters
 
 
@@ -230,3 +231,128 @@ def detail(request):
     paginator = PageNumberPagination()
     page = paginator.paginate_queryset(qs, request)
     return paginator.get_paginated_response(list(page) if page else [])
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Bill-level endpoints (Reports → Purchase Bills page)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def bills(request):
+    """Bill-level list for Reports → Purchase Bills."""
+    f = parse_filters(request)
+
+    qs = PurchaseOrderRO.objects.filter(
+        bill_date__gte=f['start_date'], bill_date__lte=f['end_date'],
+    )
+    if 'location_id' in f:
+        qs = qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        qs = qs.filter(location_id__in=f['location_ids'])
+
+    qs = qs.order_by('-bill_date', '-id').values(
+        'id', 'bill_no', 'bill_date', 'po_no', 'po_date',
+        'supplier_id', 'location_id', 'payment_type',
+        'transport_cost', 'other_charges', 'round_off',
+        'total_cgst', 'total_sgst', 'total_igst',
+        'supplier__company_name', 'location__name',
+    )
+
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    page = list(page) if page is not None else []
+
+    # Per-line subtotals computed as qty * purchase_rate * (1 - disc%/100),
+    # since PurchaseOrderLineRO has no precomputed line_total column.
+    bill_ids = [o['id'] for o in page]
+    line_subtotals = {bid: 0.0 for bid in bill_ids}
+    if bill_ids:
+        from django.db.models import F, FloatField, ExpressionWrapper
+        line_qs = (
+            PurchaseOrderLineRO.objects
+            .filter(purchase_order_id__in=bill_ids)
+            .annotate(
+                gross=ExpressionWrapper(
+                    F('quantity') * F('purchase_rate'),
+                    output_field=FloatField(),
+                ),
+            )
+            .values('purchase_order_id', 'gross', 'discount_percent')
+        )
+        for l in line_qs:
+            disc = float(l['discount_percent'] or 0)
+            net = float(l['gross'] or 0) * (1 - disc / 100.0)
+            line_subtotals[l['purchase_order_id']] += net
+
+    results = []
+    for o in page:
+        gst = float((o['total_cgst'] or 0)) + float((o['total_sgst'] or 0)) + float((o['total_igst'] or 0))
+        line_sub = round(line_subtotals.get(o['id'], 0.0), 2)
+        transport = float(o['transport_cost'] or 0)
+        other = float(o['other_charges'] or 0)
+        roff = float(o['round_off'] or 0)
+        net = round(line_sub + gst + transport + other + roff, 2)
+        results.append({
+            'id': o['id'],
+            'bill_no': o['bill_no'] or '',
+            'po_no': o['po_no'] or '',
+            'date': o['bill_date'].isoformat() if o['bill_date'] else None,
+            'po_date': o['po_date'].isoformat() if o['po_date'] else None,
+            'supplier_id': o['supplier_id'],
+            'supplier_name': o['supplier__company_name'] or '',
+            'location_id': o['location_id'],
+            'location_name': o['location__name'] or '',
+            'subtotal': line_sub,
+            'discount': 0.0,
+            'gst': round(gst, 2),
+            'transport': transport,
+            'other_charges': other,
+            'round_off': roff,
+            'net_amount': net,
+            'payment_type': o['payment_type'] or '',
+        })
+    return paginator.get_paginated_response(results)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def bill_lines(request):
+    """Line items for a single purchase bill. Query param: id=<int>."""
+    raw_id = request.query_params.get('id', '')
+    try:
+        bill_id = int(raw_id)
+    except (ValueError, TypeError):
+        return Response({'detail': 'invalid id'}, status=400)
+
+    lines_qs = PurchaseOrderLineRO.objects.filter(purchase_order_id=bill_id).values(
+        'id', 'product__name', 'product_name', 'batch_no', 'expiry_month',
+        'quantity', 'free_qty', 'purchase_rate', 'mrp',
+        'discount_percent', 'tax_percent',
+        'cgst_amount', 'sgst_amount', 'igst_amount',
+    )
+    results = []
+    for i, l in enumerate(lines_qs):
+        qty = l['quantity'] or 0
+        rate = float(l['purchase_rate'] or 0)
+        disc_pct = float(l['discount_percent'] or 0)
+        gross = qty * rate
+        disc = gross * disc_pct / 100.0
+        gst_amt = float((l['cgst_amount'] or 0) + (l['sgst_amount'] or 0) + (l['igst_amount'] or 0))
+        line_total = round(gross - disc + gst_amt, 2)
+        results.append({
+            'sno': i + 1,
+            'product_name': l['product__name'] or l['product_name'] or '',
+            'batch': l['batch_no'] or '',
+            'expiry': l['expiry_month'] or '',
+            'ordered_qty': qty,
+            'received_qty': qty,
+            'free_qty': l['free_qty'] or 0,
+            'unit_price': rate,
+            'mrp': float(l['mrp'] or 0),
+            'discount_pct': disc_pct,
+            'gst_rate': float(l['tax_percent'] or 0),
+            'gst_amt': round(gst_amt, 2),
+            'line_total': line_total,
+        })
+    return Response({'results': results})

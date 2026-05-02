@@ -8,6 +8,10 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
 from reports.models import ReportSales, ReportSalesReturns, ReportFinancial, ReportInventory
+from source_models.models import (
+    POSOrderRO, POSOrderLineRO,
+    B2BSalesOrderRO, B2BSalesOrderLineRO,
+)
 from .helpers import (
     parse_filters,
     apply_common_filters,
@@ -691,3 +695,179 @@ def returns_detail(request):
     paginator = PageNumberPagination()
     page = paginator.paginate_queryset(qs, request)
     return paginator.get_paginated_response(list(page) if page else [])
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Bill-level endpoints (Reports → Sales Bills page)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _channels_filter(f):
+    """Returns set of normalised channel tokens or None when all-channels."""
+    raw = f.get('channels') or ([f['channel']] if 'channel' in f else None)
+    if not raw:
+        return None
+    return {c.strip().lower() for c in raw}
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def bills(request):
+    """Bill-level list for Reports → Sales Bills (POS + B2B unioned)."""
+    f = parse_filters(request)
+    chans = _channels_filter(f)
+    include_pos = chans is None or any('pos' in c for c in chans)
+    include_b2b = chans is None or any('b2b' in c or 'wholesale' in c for c in chans)
+
+    rows = []
+
+    if include_pos:
+        pos_qs = POSOrderRO.objects.filter(
+            sale_date__date__gte=f['start_date'],
+            sale_date__date__lte=f['end_date'],
+        )
+        if 'location_id' in f:
+            pos_qs = pos_qs.filter(location_id=f['location_id'])
+        elif 'location_ids' in f:
+            pos_qs = pos_qs.filter(location_id__in=f['location_ids'])
+        if 'payment_method' in f:
+            pos_qs = pos_qs.filter(payment_type=f['payment_method'])
+        elif 'payment_methods' in f:
+            pos_qs = pos_qs.filter(payment_type__in=f['payment_methods'])
+
+        pos_qs = pos_qs.values(
+            'id', 'invoice_no', 'sale_date', 'customer_id', 'location_id',
+            'payment_type', 'subtotal', 'discount_amount', 'gst_percent',
+            'round_off', 'total_amount', 'status',
+            'customer__customer_name', 'location__name',
+        )
+        for o in pos_qs:
+            net = float(o['total_amount'] or 0)
+            sub = float(o['subtotal'] or 0)
+            disc = float(o['discount_amount'] or 0)
+            roff = float(o['round_off'] or 0)
+            gst = round(net - sub + disc - roff, 2)
+            rows.append({
+                'id': f"POS-{o['id']}",
+                'type': 'POS',
+                'invoice_no': o['invoice_no'] or f"POS-{o['id']}",
+                'date': o['sale_date'].date().isoformat() if o['sale_date'] else None,
+                'customer_id': o['customer_id'],
+                'customer_name': o['customer__customer_name'] or 'Walk-in',
+                'location_id': o['location_id'],
+                'location_name': o['location__name'] or '',
+                'subtotal': sub,
+                'discount': disc,
+                'gst': gst,
+                'round_off': roff,
+                'net_amount': net,
+                'payment': o['payment_type'] or '',
+                'status': (o['status'] or '').title() or 'Completed',
+            })
+
+    if include_b2b:
+        b2b_qs = B2BSalesOrderRO.objects.filter(
+            sale_date__gte=f['start_date'],
+            sale_date__lte=f['end_date'],
+        )
+        if 'location_id' in f:
+            b2b_qs = b2b_qs.filter(location_id=f['location_id'])
+        elif 'location_ids' in f:
+            b2b_qs = b2b_qs.filter(location_id__in=f['location_ids'])
+        if 'payment_method' in f:
+            b2b_qs = b2b_qs.filter(payment_type=f['payment_method'])
+        elif 'payment_methods' in f:
+            b2b_qs = b2b_qs.filter(payment_type__in=f['payment_methods'])
+
+        b2b_qs = b2b_qs.values(
+            'id', 'invoice_no', 'sale_date', 'customer_id', 'location_id',
+            'payment_type', 'subtotal', 'discount_amount',
+            'total_cgst', 'total_sgst', 'total_igst',
+            'round_off', 'total_amount', 'status',
+            'customer__customer_name', 'location__name',
+        )
+        for o in b2b_qs:
+            gst = float((o['total_cgst'] or 0)) + float((o['total_sgst'] or 0)) + float((o['total_igst'] or 0))
+            rows.append({
+                'id': f"B2B-{o['id']}",
+                'type': 'B2B',
+                'invoice_no': o['invoice_no'] or f"B2B-{o['id']}",
+                'date': o['sale_date'].isoformat() if o['sale_date'] else None,
+                'customer_id': o['customer_id'],
+                'customer_name': o['customer__customer_name'] or '',
+                'location_id': o['location_id'],
+                'location_name': o['location__name'] or '',
+                'subtotal': float(o['subtotal'] or 0),
+                'discount': float(o['discount_amount'] or 0),
+                'gst': round(gst, 2),
+                'round_off': float(o['round_off'] or 0),
+                'net_amount': float(o['total_amount'] or 0),
+                'payment': o['payment_type'] or '',
+                'status': (o['status'] or '').title() or 'Confirmed',
+            })
+
+    rows.sort(key=lambda r: (r['date'] or '', r['invoice_no']), reverse=True)
+
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(rows, request)
+    return paginator.get_paginated_response(page if page is not None else [])
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def bill_lines(request):
+    """Line items for a single sales bill. Query params: type=POS|B2B, id=<int>."""
+    bill_type = (request.query_params.get('type') or '').upper()
+    raw_id = request.query_params.get('id', '')
+    try:
+        bill_id = int(raw_id)
+    except (ValueError, TypeError):
+        return Response({'detail': 'invalid id'}, status=400)
+
+    if bill_type == 'POS':
+        lines_qs = POSOrderLineRO.objects.filter(pos_order_id=bill_id).values(
+            'id', 'product__name', 'batch_no', 'expiry_month',
+            'quantity', 'unit_price', 'discount_percent', 'discount_amount',
+            'tax_percent', 'line_total',
+        )
+        results = [
+            {
+                'sno': i + 1,
+                'product_name': l['product__name'] or '',
+                'batch': l['batch_no'] or '',
+                'expiry': l['expiry_month'] or '',
+                'qty': l['quantity'],
+                'price': float(l['unit_price'] or 0),
+                'mrp': 0,
+                'discount_pct': float(l['discount_percent'] or 0),
+                'gst_rate': float(l['tax_percent'] or 0),
+                'gst_amt': 0,
+                'line_total': float(l['line_total'] or 0),
+            }
+            for i, l in enumerate(lines_qs)
+        ]
+    elif bill_type == 'B2B':
+        lines_qs = B2BSalesOrderLineRO.objects.filter(sales_order_id=bill_id).values(
+            'id', 'product__name', 'service_description', 'batch_no', 'expiry_month',
+            'quantity', 'unit_price', 'discount_percent',
+            'tax_percent', 'cgst_amount', 'sgst_amount', 'igst_amount', 'line_total',
+        )
+        results = [
+            {
+                'sno': i + 1,
+                'product_name': l['product__name'] or l['service_description'] or '',
+                'batch': l['batch_no'] or '',
+                'expiry': l['expiry_month'] or '',
+                'qty': l['quantity'],
+                'price': float(l['unit_price'] or 0),
+                'mrp': 0,
+                'discount_pct': float(l['discount_percent'] or 0),
+                'gst_rate': float(l['tax_percent'] or 0),
+                'gst_amt': float((l['cgst_amount'] or 0) + (l['sgst_amount'] or 0) + (l['igst_amount'] or 0)),
+                'line_total': float(l['line_total'] or 0),
+            }
+            for i, l in enumerate(lines_qs)
+        ]
+    else:
+        return Response({'detail': 'type must be POS or B2B'}, status=400)
+
+    return Response({'results': results})
