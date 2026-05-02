@@ -209,27 +209,32 @@ def today_sales(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def filter_options(request):
-    """Return dynamic filter options from the database."""
-    locations = list(
-        ReportSales.objects.values('location_id', 'location_name')
-        .distinct().order_by('location_id')
-    )
-    categories = list(
-        ReportSales.objects.values_list('product_category', flat=True)
-        .distinct().order_by('product_category')
-    )
-    channels = list(
-        ReportSales.objects.values_list('channel', flat=True)
-        .distinct().order_by('channel')
-    )
-    payment_methods = list(
-        ReportSales.objects.values_list('payment_method', flat=True)
-        .distinct().order_by('payment_method')
+    """Return dynamic filter options from the database.
+
+    Reads from upstream source tables so the dropdowns work even before
+    the sales ETL has populated ReportSales.
+    """
+    from source_models.models import (
+        LocationRO, ProductRO, POSOrderRO, B2BSalesOrderRO,
     )
 
+    locations = list(
+        LocationRO.objects.values('id', 'name').order_by('id')
+    )
+    categories = list(
+        ProductRO.objects.values_list('pharma_category', flat=True)
+        .exclude(pharma_category__isnull=True).exclude(pharma_category='')
+        .distinct().order_by('pharma_category')
+    )
+    payment_methods = sorted(set(
+        list(POSOrderRO.objects.values_list('payment_type', flat=True).distinct())
+        + list(B2BSalesOrderRO.objects.values_list('payment_type', flat=True).distinct())
+    ))
+    channels = ['POS', 'B2B']  # finite enum; ReportSales is empty until ETL runs
+
     return Response({
-        'locations': [{'id': str(l['location_id']), 'name': l['location_name'] or f"Location {l['location_id']}"} for l in locations],
+        'locations': [{'id': str(l['id']), 'name': l['name'] or f"Location {l['id']}"} for l in locations],
         'categories': [c for c in categories if c],
-        'channels': [c for c in channels if c],
+        'channels': channels,
         'payment_methods': [p for p in payment_methods if p],
     })
