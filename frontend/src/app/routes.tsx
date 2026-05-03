@@ -23,6 +23,7 @@ import {
 import { SalesDetailData } from "./pages/detail/SalesDetailData";
 import {
   InventoryDetailData,
+  InventoryMovementDetailData,
   PurchaseDetailData,
   FinancialDetailData,
   GSTDetailData,
@@ -64,6 +65,7 @@ export const router = createBrowserRouter([
       // Detail Data Pages
       { path: "detail/sales", Component: SalesDetailData },
       { path: "detail/inventory", Component: InventoryDetailData },
+      { path: "detail/inventory-movement", Component: InventoryMovementDetailData },
       { path: "detail/purchase", Component: PurchaseDetailData },
       { path: "detail/financial", Component: FinancialDetailData },
       { path: "detail/gst", Component: GSTDetailData },

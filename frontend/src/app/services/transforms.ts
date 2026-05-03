@@ -155,13 +155,22 @@ export function toDoctors(data: any[]): any[] {
   }));
 }
 
-/** Transform inventory overview from API */
+/** Transform inventory overview from API.
+ *
+ * Backend `by_category` already replaces NULL `product_category` with
+ * 'Uncategorized' on the response (`d['category'] = ...`); we honor `category`
+ * first and fall back through `product_category` and finally to a safe
+ * placeholder so recharts never receives an empty string (which it renders as
+ * the array index — the source of the "0,1,2" label bug). */
 export function toInventoryCategory(data: any[]): any[] {
-  return data.map(r => ({
-    category: r.product_category || '',
-    value: Number(r.value || r.investment) || 0,
-    qty: Number(r.qty) || 0,
-    items: Number(r.items) || 0,
-    ...numericize(r),
-  }));
+  return data.map(r => {
+    const numerized = numericize(r);
+    return {
+      ...numerized,
+      category: r.category || r.product_category || 'Uncategorized',
+      value: Number(r.value || r.investment) || 0,
+      qty: Number(r.qty) || 0,
+      items: Number(r.items) || 0,
+    };
+  });
 }

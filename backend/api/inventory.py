@@ -307,45 +307,102 @@ def movement_trend(request):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
-def abc_ved(request):
+def movement_detail(request):
+    """Per-event stock movement log: purchases (in), sales (out), returns (in).
+
+    Drill-through target for Movement Analysis charts. Supports filters:
+    location, category, date range, optional `month` ('YYYY-MM') from chart.
+    """
+    from reports.models import ReportSalesReturns
+
     f = parse_filters(request)
-    qs = _apply_inventory_filters(_latest_snapshot(), f)
+    params = request.query_params
+    month = (params.get('month') or '').strip()
 
-    # Priority ranking of the 9 ABC x VED cells
-    # (A = high revenue, V = vital medicine)
-    priority = {
-        ('A', 'V'): 'high-priority',
-        ('A', 'E'): 'high',
-        ('B', 'V'): 'high',
-        ('A', 'D'): 'medium',
-        ('B', 'E'): 'medium',
-        ('C', 'V'): 'medium',
-        ('B', 'D'): 'low',
-        ('C', 'E'): 'low',
-        ('C', 'D'): 'low',
-    }
+    p_qs = ReportPurchases.objects.filter(is_return=False)
+    s_qs = ReportSales.objects.all()
+    sr_qs = ReportSalesReturns.objects.all()
 
-    raw = list(
-        qs.values('abc_class', 'product_ved_class')
-        .annotate(count=Count('product_id', distinct=True), value=Sum('stock_value_cost'))
-        .order_by('abc_class', 'product_ved_class')
-    )
-    data = []
-    for r in raw:
-        abc = (r['abc_class'] or '').upper() or 'C'
-        ved = (r['product_ved_class'] or '').upper() or 'D'
-        classification = f"{abc}-{ved}"
-        data.append({
-            'classification': classification,
-            'abc_class': abc,
-            'product_ved_class': ved,
-            'items': int(r['count'] or 0),
-            'value': float(r['value'] or 0),
-            'count': int(r['count'] or 0),
-            'status': priority.get((abc, ved), 'low'),
+    if month:
+        p_qs = p_qs.filter(purchase_month=month)
+        s_qs = s_qs.filter(sale_month=month)
+        sr_qs = sr_qs.filter(return_month=month)
+    else:
+        start = f['start_date']
+        end = f['end_date']
+        p_qs = p_qs.filter(bill_date__gte=start, bill_date__lte=end)
+        s_qs = s_qs.filter(sale_date__gte=start, sale_date__lte=end)
+        sr_qs = sr_qs.filter(return_date__gte=start, return_date__lte=end)
+
+    if 'location_id' in f:
+        p_qs = p_qs.filter(location_id=f['location_id'])
+        s_qs = s_qs.filter(location_id=f['location_id'])
+        sr_qs = sr_qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        p_qs = p_qs.filter(location_id__in=f['location_ids'])
+        s_qs = s_qs.filter(location_id__in=f['location_ids'])
+        sr_qs = sr_qs.filter(location_id__in=f['location_ids'])
+    if 'categories' in f:
+        p_qs = p_qs.filter(product_category__in=f['categories'])
+        s_qs = s_qs.filter(product_category__in=f['categories'])
+        sr_qs = sr_qs.filter(product_category__in=f['categories'])
+    elif 'category' in f:
+        p_qs = p_qs.filter(product_category=f['category'])
+        s_qs = s_qs.filter(product_category=f['category'])
+        sr_qs = sr_qs.filter(product_category=f['category'])
+
+    rows = []
+    for r in p_qs.values(
+        'bill_date', 'product_name', 'product_category', 'quantity',
+        'line_total', 'location_name', 'bill_no', 'batch_no',
+    ):
+        rows.append({
+            'date': r['bill_date'].isoformat() if r['bill_date'] else '',
+            'type': 'Purchase',
+            'product': r['product_name'],
+            'category': r['product_category'],
+            'qty': int(r['quantity'] or 0),
+            'value': float(r['line_total'] or 0),
+            'location': r['location_name'],
+            'reference': r['bill_no'],
+            'batch': r['batch_no'],
         })
-    data.sort(key=lambda x: (-x['value'],))
-    return Response(data)
+    for r in s_qs.values(
+        'sale_date', 'product_name', 'product_category', 'quantity',
+        'line_total', 'location_name', 'invoice_no', 'batch_no',
+    ):
+        rows.append({
+            'date': r['sale_date'].isoformat() if r['sale_date'] else '',
+            'type': 'Sale',
+            'product': r['product_name'],
+            'category': r['product_category'],
+            'qty': -int(r['quantity'] or 0),
+            'value': float(r['line_total'] or 0),
+            'location': r['location_name'],
+            'reference': r['invoice_no'],
+            'batch': r['batch_no'],
+        })
+    for r in sr_qs.values(
+        'return_date', 'product_name', 'product_category', 'quantity',
+        'line_total', 'location_name', 'return_no', 'batch_no',
+    ):
+        rows.append({
+            'date': r['return_date'].isoformat() if r['return_date'] else '',
+            'type': 'Sales Return',
+            'product': r['product_name'],
+            'category': r['product_category'],
+            'qty': int(r['quantity'] or 0),
+            'value': float(r['line_total'] or 0),
+            'location': r['location_name'],
+            'reference': r['return_no'],
+            'batch': r['batch_no'],
+        })
+
+    rows.sort(key=lambda x: x['date'], reverse=True)
+
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(rows, request)
+    return paginator.get_paginated_response(list(page) if page is not None else [])
 
 
 @api_view(['GET'])
@@ -1603,19 +1660,31 @@ def investment_detail(request):
 def detail_view(request):
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f).order_by('-stock_value_cost')
-    # Support drill-through filters from Executive Summary
+    # Support drill-through filters from Executive Summary + KPI cards
     params = request.query_params
     if params.get('reorder_needed'):
         qs = qs.filter(reorder_needed=True)
     if params.get('expiry_status'):
-        qs = qs.filter(expiry_status=params['expiry_status'])
+        # Comma-separated allowed: critical_30,critical_60
+        statuses = [s.strip() for s in str(params['expiry_status']).split(',') if s.strip()]
+        if statuses:
+            qs = qs.filter(expiry_status__in=statuses)
     if params.get('movement_status'):
         qs = qs.filter(movement_status=params['movement_status'])
+    # Stock alert status: stockout / low / overstock
+    if params.get('status'):
+        s = str(params['status']).lower()
+        if s == 'stockout':
+            qs = qs.filter(qty_on_hand=0)
+        elif s == 'low':
+            qs = qs.filter(reorder_needed=True, qty_on_hand__gt=0)
+        elif s == 'overstock':
+            qs = qs.filter(days_of_stock__gt=180, days_of_stock__lt=9999)
     qs = qs.values(
         'product_name', 'product_code', 'product_category',
         'batch_no', 'expiry_month', 'expiry_status',
         'qty_on_hand', 'purchase_rate', 'mrp',
-        'stock_value_cost', 'movement_status', 'abc_class',
+        'stock_value_cost', 'movement_status',
         'days_of_stock', 'location_name',
     )
 

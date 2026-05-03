@@ -55,7 +55,7 @@ urlpatterns = [
     path('inventory/by-category/', inventory.by_category),
     path('inventory/expiry/', inventory.expiry),
     path('inventory/movement-trend/', inventory.movement_trend),
-    path('inventory/abc-ved/', inventory.abc_ved),
+    path('inventory/movement-detail/', inventory.movement_detail),
     path('inventory/dead-stock/', inventory.dead_stock),
     path('inventory/forecast/', inventory.forecast),
     path('inventory/efficiency/', inventory.efficiency),

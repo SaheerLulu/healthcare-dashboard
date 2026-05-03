@@ -72,24 +72,6 @@ def _derive_category(name: str) -> str:
     return 'General Pharma'
 
 
-_VITAL_KEYWORDS = ('INSULIN', 'ADRENALINE', 'ATROPINE', 'CARDIAC', 'NTG', 'NITROGLYCERIN', 'EPINEPHRINE', 'ANTIDOTE', 'OXYGEN', 'BIPAP', 'CPAP')
-_ESSENTIAL_KEYWORDS = ('TABLET', ' TAB', 'CAPSULE', ' CAP', 'SYRUP', 'SUSPENSION', 'ANTIBIOTIC', 'ANALGESIC', 'DIABETIC', 'INJ ', 'INJECT')
-
-
-def _derive_ved(name: str, category: str) -> str:
-    """V/E/D classification — Vital / Essential / Desirable."""
-    upper = (name or '').upper()
-    if any(k in upper for k in _VITAL_KEYWORDS):
-        return 'V'
-    if any(k in upper for k in _ESSENTIAL_KEYWORDS):
-        return 'E'
-    if category in ('Tablets', 'Capsules', 'Syrups', 'Suspensions', 'Drops', 'Injectables'):
-        return 'E'
-    if category in ('Hygiene', 'Personal Care', 'Equipment'):
-        return 'D'
-    return 'E'  # default to essential — better than D for unknowns
-
-
 def _product_fields(product):
     """Extract product dimension fields, returning defaults if product is None."""
     if not product:
@@ -99,13 +81,12 @@ def _product_fields(product):
             'product_company': '', 'product_hsn_code': '',
             'product_gst_percent': Decimal('0'), 'product_molecule': '',
             'product_drug_schedule': '', 'product_dosage_form': '',
-            'product_therapeutic_category': '', 'product_ved_class': '',
+            'product_therapeutic_category': '',
         }
     name = product.name or ''
     # Source data has empty pharma_category for ~all products, so derive from
-    # the product name when that's the case. Same for VED classification.
+    # the product name when that's the case.
     cat = product.pharma_category or _derive_category(name)
-    ved = product.pharma_ved_classification or _derive_ved(name, cat)
     return {
         'product_id': product.id,
         'product_name': name,
@@ -119,7 +100,6 @@ def _product_fields(product):
         'product_drug_schedule': product.pharma_drug_schedule or '',
         'product_dosage_form': product.pharma_dosage_form or '',
         'product_therapeutic_category': product.pharma_therapeutic_category or '',
-        'product_ved_class': ved,
     }
 
 
@@ -749,27 +729,6 @@ class InventoryPipeline:
             key = (row['product_id'], row['location_id'])
             last_purchase_map[key] = row['last_date']
 
-        # ABC classification: rank products by total revenue contribution
-        abc_map = {}
-        revenue_by_product = list(
-            ReportSales.objects
-            .filter(sale_date__gte=ninety_days_ago)
-            .values('product_id')
-            .annotate(total_revenue=Sum('line_total'))
-            .order_by('-total_revenue')
-        )
-        total_revenue = sum(r['total_revenue'] or 0 for r in revenue_by_product)
-        cumulative = Decimal('0')
-        for r in revenue_by_product:
-            cumulative += r['total_revenue'] or 0
-            pct = (cumulative / total_revenue * 100) if total_revenue else 0
-            if pct <= 80:
-                abc_map[r['product_id']] = 'A'
-            elif pct <= 95:
-                abc_map[r['product_id']] = 'B'
-            else:
-                abc_map[r['product_id']] = 'C'
-
         # Delete old snapshot and rebuild
         ReportInventory.objects.all().delete()
 
@@ -834,7 +793,6 @@ class InventoryPipeline:
             else:
                 mov_status = 'dead'
 
-            abc = abc_map.get(product.id, 'C')
             min_stock = safe_decimal(product.pharma_min_stock)
             reorder = qty < float(min_stock) if min_stock else False
             safety = (avg_demand * 7).quantize(Decimal('0.01'), ROUND_HALF_UP)
@@ -878,7 +836,6 @@ class InventoryPipeline:
                 days_since_last_sale=days_since_sale,
                 last_purchase_date=last_purch,
                 movement_status=mov_status,
-                abc_class=abc,
                 reorder_needed=reorder,
                 safety_stock=safety,
                 fill_rate=Decimal('95.00'),  # Placeholder, needs stockout history

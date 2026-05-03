@@ -62,7 +62,6 @@ class ReportSales(models.Model):
     product_drug_schedule = models.CharField(max_length=10, blank=True)
     product_dosage_form = models.CharField(max_length=100, blank=True)
     product_therapeutic_category = models.CharField(max_length=255, blank=True)
-    product_ved_class = models.CharField(max_length=1, blank=True)
 
     # Batch dimension
     batch_no = models.CharField(max_length=100, blank=True)
@@ -244,7 +243,6 @@ class ReportInventory(models.Model):
     product_drug_schedule = models.CharField(max_length=10, blank=True)
     product_dosage_form = models.CharField(max_length=100, blank=True)
     product_therapeutic_category = models.CharField(max_length=255, blank=True)
-    product_ved_class = models.CharField(max_length=1, blank=True)
     product_is_critical = models.BooleanField(default=False)
     product_requires_cold_chain = models.BooleanField(default=False)
     product_min_stock = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -281,7 +279,6 @@ class ReportInventory(models.Model):
 
     # Classification
     movement_status = models.CharField(max_length=20, blank=True, db_index=True)
-    abc_class = models.CharField(max_length=1, blank=True, db_index=True)
     reorder_needed = models.BooleanField(default=False)
     safety_stock = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 

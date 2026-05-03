@@ -2,15 +2,15 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 import { useFilters, GlobalFilters } from '../contexts/FilterContext';
 
-/** Convert GlobalFilters to API query params. */
+/** Convert GlobalFilters to API query params.
+ *
+ * Only date range + location are global. Channel/payment/category are
+ * per-page local filters now — pages should pass them via `options.params`. */
 function filtersToParams(filters: GlobalFilters): Record<string, string> {
   const params: Record<string, string> = {};
   if (filters.dateRange.start) params.start_date = filters.dateRange.start;
   if (filters.dateRange.end) params.end_date = filters.dateRange.end;
   if (filters.locations.length) params.location_ids = filters.locations.join(',');
-  if (filters.salesChannel.length) params.channel = filters.salesChannel.join(',');
-  if (filters.paymentMethod.length) params.payment_method = filters.paymentMethod.join(',');
-  if (filters.productCategories.length) params.category = filters.productCategories.join(',');
   return params;
 }
 

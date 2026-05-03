@@ -5,6 +5,8 @@ export interface GlobalFilters {
   quickPreset: string;
   financialYear: string;
   locations: string[];
+  // Deprecated fields kept for backward-compat with existing code that reads
+  // them. They are always empty and never written; treat them as legacy.
   salesChannel: string[];
   paymentMethod: string[];
   productCategories: string[];

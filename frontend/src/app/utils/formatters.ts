@@ -63,3 +63,84 @@ export const formatIndianDate = (date: string | Date): string => {
 export const formatPercentage = (value: number, decimals: number = 1): string => {
   return `${value.toFixed(decimals)}%`;
 };
+
+/**
+ * Pick an axis short-format scale based on the magnitude of values in a series.
+ * Returns a tickFormatter and the unit label.
+ *   max ≥ 1Cr → 'X.XXCr'
+ *   max ≥ 1L  → 'X.XXL'
+ *   max ≥ 1K  → 'X.XXK'
+ *   else      → 'X.XX'
+ *
+ * Use the SAME scale across the whole axis so ticks read consistently.
+ */
+export const pickAxisScale = (
+  values: number[],
+  opts?: { currency?: boolean }
+): { format: (v: number) => string; unit: string; divisor: number } => {
+  const finite = values.map((v) => Math.abs(Number(v) || 0)).filter((v) => isFinite(v));
+  const max = finite.length ? Math.max(...finite) : 0;
+  const prefix = opts?.currency ? '₹' : '';
+
+  let unit: string;
+  let divisor: number;
+  if (max >= 10000000) {
+    unit = 'Cr';
+    divisor = 10000000;
+  } else if (max >= 100000) {
+    unit = 'L';
+    divisor = 100000;
+  } else if (max >= 1000) {
+    unit = 'K';
+    divisor = 1000;
+  } else {
+    unit = '';
+    divisor = 1;
+  }
+
+  const format = (v: number) => {
+    const n = Number(v) || 0;
+    const sign = n < 0 ? '-' : '';
+    const scaled = Math.abs(n) / divisor;
+    return `${sign}${prefix}${scaled.toFixed(2)}${unit}`;
+  };
+
+  return { format, unit, divisor };
+};
+
+/**
+ * Always full value (no abbreviation), 2 decimals — used in tooltips so users
+ * see the actual number even when the axis shows abbreviated ticks.
+ *   formatTooltipFull(123456.789) → '1,23,456.79'
+ *   formatTooltipFull(123456.789, { currency: true }) → '₹1,23,456.79'
+ */
+export const formatTooltipFull = (
+  value: number | string,
+  opts?: { currency?: boolean; decimals?: number }
+): string => {
+  const n = Number(value);
+  if (!isFinite(n)) return opts?.currency ? '₹0.00' : '0.00';
+  const decimals = opts?.decimals ?? 2;
+  const sign = n < 0 ? '-' : '';
+  const formatted = Math.abs(n).toLocaleString('en-IN', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+  return opts?.currency ? `${sign}₹${formatted}` : `${sign}${formatted}`;
+};
+
+/**
+ * Number-only short form (no ₹), 2 decimals — for non-currency axes (qty, days, %).
+ *   formatNumberShort(1234567) → '12.35L'
+ *   formatNumberShort(450) → '450.00'
+ */
+export const formatNumberShort = (value: number | string): string => {
+  const n = Number(value);
+  if (!isFinite(n)) return '0.00';
+  const sign = n < 0 ? '-' : '';
+  const v = Math.abs(n);
+  if (v >= 10000000) return `${sign}${(v / 10000000).toFixed(2)}Cr`;
+  if (v >= 100000) return `${sign}${(v / 100000).toFixed(2)}L`;
+  if (v >= 1000) return `${sign}${(v / 1000).toFixed(2)}K`;
+  return `${sign}${v.toFixed(2)}`;
+};

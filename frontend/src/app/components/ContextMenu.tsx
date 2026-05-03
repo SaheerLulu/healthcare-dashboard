@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { ArrowRight, Table2, Copy, X, Filter, ChevronRight } from 'lucide-react';
 import { useCrossFilter } from '../contexts/CrossFilterContext';
@@ -7,9 +7,16 @@ interface ContextMenuProps {
   x: number;
   y: number;
   onClose: () => void;
+  /** Where to navigate on Drill Through. */
   drillThroughTarget: string;
-  drillThroughContext?: any;
-  data?: any;
+  /** What page label to show on the destination's "Back to ..." button. */
+  fromLabel?: string;
+  /** Path to return to on the destination's back button (e.g. "/inventory?tab=movement"). */
+  fromPath?: string;
+  /** The dimension name being drilled (e.g. "category", "month"). */
+  dimension?: string;
+  /** The chart payload underneath the right-click (e.g. {category:"Gastro", value:123}). */
+  payload?: any;
 }
 
 export const ContextMenu: React.FC<ContextMenuProps> = ({
@@ -17,12 +24,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   y,
   onClose,
   drillThroughTarget,
-  drillThroughContext,
-  data,
+  fromLabel,
+  fromPath,
+  dimension,
+  payload,
 }) => {
   const navigate = useNavigate();
   const menuRef = useRef<HTMLDivElement>(null);
-  const { addCrossFilter } = useCrossFilter();
+  const { addCrossFilter, activeFilters } = useCrossFilter();
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -30,13 +39,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         onClose();
       }
     };
-
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
+      if (event.key === 'Escape') onClose();
     };
-
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleEscape);
     return () => {
@@ -45,67 +50,83 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     };
   }, [onClose]);
 
-  // Adjust position if menu would go off screen
   useEffect(() => {
-    if (menuRef.current) {
-      const rect = menuRef.current.getBoundingClientRect();
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-
-      let adjustedX = x;
-      let adjustedY = y;
-
-      if (rect.right > viewportWidth) {
-        adjustedX = x - rect.width;
-      }
-
-      if (rect.bottom > viewportHeight) {
-        adjustedY = y - rect.height;
-      }
-
-      menuRef.current.style.left = `${adjustedX}px`;
-      menuRef.current.style.top = `${adjustedY}px`;
-    }
+    if (!menuRef.current) return;
+    const rect = menuRef.current.getBoundingClientRect();
+    const adjustedX = rect.right > window.innerWidth ? x - rect.width : x;
+    const adjustedY = rect.bottom > window.innerHeight ? y - rect.height : y;
+    menuRef.current.style.left = `${adjustedX}px`;
+    menuRef.current.style.top = `${adjustedY}px`;
   }, [x, y]);
+
+  const buildDrillFilter = () => {
+    if (!dimension || !payload) return null;
+    const value = payload[dimension] ?? payload.name ?? payload.category;
+    if (value === undefined || value === null || value === '') return null;
+    return {
+      id: dimension,
+      label: `${dimension}: ${value}`,
+      value: String(value),
+    };
+  };
+
+  const buildDrillContext = () => {
+    const drillFilter = buildDrillFilter();
+    const filters = drillFilter
+      ? [...activeFilters, drillFilter]
+      : [...activeFilters];
+    return {
+      from: fromLabel || 'previous page',
+      fromPath,
+      filters,
+    };
+  };
 
   const handleDrillThrough = () => {
     navigate(drillThroughTarget, {
-      state: {
-        drillThrough: drillThroughContext,
-      },
+      state: { drillThrough: buildDrillContext() },
     });
     onClose();
   };
 
-  const handleIncludeOnly = () => {
-    if (data) {
-      // Add as cross-filter
-      const filterLabel = Object.entries(data)
-        .filter(([key]) => key !== 'fill' && key !== 'payload')
-        .map(([key, value]) => `${key}: ${value}`)
+  const handleAddFilter = () => {
+    const drillFilter = buildDrillFilter();
+    if (drillFilter) {
+      addCrossFilter(drillFilter);
+    } else if (payload) {
+      const filterLabel = Object.entries(payload)
+        .filter(([k]) => k !== 'fill' && k !== 'payload')
+        .map(([k, v]) => `${k}: ${v}`)
         .join(', ');
-      
       addCrossFilter({
         id: `filter-${Date.now()}`,
         label: filterLabel,
-        value: data,
+        value: payload,
       });
     }
     onClose();
   };
 
+  const handleShowDataTable = () => {
+    navigate(drillThroughTarget, {
+      state: { drillThrough: buildDrillContext() },
+    });
+    onClose();
+  };
+
   const handleCopyValue = () => {
-    if (data) {
-      const value = JSON.stringify(data, null, 2);
-      navigator.clipboard.writeText(value);
+    if (payload) {
+      navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
     }
     onClose();
   };
 
+  const filterPreview = buildDrillFilter();
+
   return (
     <div
       ref={menuRef}
-      className="fixed bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-[9999] min-w-[220px] animate-in fade-in duration-100"
+      className="fixed bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-[9999] min-w-[240px] animate-in fade-in duration-100"
       style={{ left: x, top: y }}
       onContextMenu={(e) => e.preventDefault()}
     >
@@ -113,6 +134,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
           Quick Actions
         </p>
+        {filterPreview && (
+          <p className="text-[11px] text-gray-700 mt-0.5 truncate">
+            {filterPreview.label}
+          </p>
+        )}
       </div>
 
       <button
@@ -127,14 +153,18 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
       <div className="border-t border-gray-200 my-1" />
 
       <button
-        onClick={handleIncludeOnly}
-        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+        onClick={handleAddFilter}
+        disabled={!payload}
+        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-40"
       >
         <Filter className="w-4 h-4" />
         <span>Add to Filters</span>
       </button>
 
-      <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+      <button
+        onClick={handleShowDataTable}
+        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+      >
         <Table2 className="w-4 h-4" />
         <span>Show Data Table</span>
       </button>
@@ -143,15 +173,19 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
       <button
         onClick={handleCopyValue}
-        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+        disabled={!payload}
+        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-40"
       >
         <Copy className="w-4 h-4" />
         <span>Copy Data</span>
       </button>
 
-      <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors">
+      <button
+        onClick={onClose}
+        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-500 hover:bg-gray-50 transition-colors"
+      >
         <X className="w-4 h-4" />
-        <span>Exclude from View</span>
+        <span>Close</span>
       </button>
     </div>
   );
