@@ -1,7 +1,7 @@
 """Location Benchmarking API endpoints."""
 from django.db.models import Sum, Count, Avg
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 
 from reports.models import ReportSales, ReportInventory
@@ -9,7 +9,7 @@ from .helpers import parse_filters, apply_common_filters
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def comparison(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -34,7 +34,7 @@ def comparison(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def trend(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -48,7 +48,7 @@ def trend(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)

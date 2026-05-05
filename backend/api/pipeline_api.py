@@ -1,7 +1,7 @@
 """Pipeline trigger API endpoints."""
 import threading
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 from pipeline.inventory_pipeline import InventoryPipeline
 from pipeline.financial_pipeline import FinancialPipeline
@@ -44,7 +44,7 @@ def _run_pipeline_background(full=False):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def trigger_pipeline(request):
     """Trigger all pipelines. Runs in background thread."""
     global _pipeline_running
@@ -73,7 +73,7 @@ def trigger_pipeline(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def pipeline_progress(request):
     """Check current pipeline run status."""
     return Response({
@@ -84,7 +84,7 @@ def pipeline_progress(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def pipeline_history(request):
     """Return recent pipeline run history."""
     logs = list(

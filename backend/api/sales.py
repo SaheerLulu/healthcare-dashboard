@@ -3,7 +3,7 @@ from datetime import date as _date, timedelta as _timedelta
 
 from django.db.models import Sum, Count, Avg, Max, F, Q
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
@@ -48,7 +48,7 @@ def _returns_range(qs, f, start, end):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def overview(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -205,7 +205,7 @@ def overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def hourly(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -219,7 +219,7 @@ def hourly(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def payment_mix(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -233,7 +233,7 @@ def payment_mix(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def products(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -254,7 +254,7 @@ def products(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def categories(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -268,7 +268,7 @@ def categories(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def slow_movers(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -321,7 +321,7 @@ def slow_movers(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def customers(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -340,7 +340,7 @@ def customers(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def customer_segments(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -358,7 +358,7 @@ def customer_segments(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def doctors(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -377,7 +377,7 @@ def doctors(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def doctor_specialties(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -392,7 +392,7 @@ def doctor_specialties(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def returns_overview(request):
     f = parse_filters(request)
     qs = _apply_returns_filters(ReportSalesReturns.objects.all(), f)
@@ -494,7 +494,7 @@ def returns_overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def returns_by_category(request):
     f = parse_filters(request)
     qs = _apply_returns_filters(ReportSalesReturns.objects.all(), f)
@@ -520,7 +520,7 @@ def returns_by_category(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def product_profitability(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -546,7 +546,7 @@ def product_profitability(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def customer_growth(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f)
@@ -564,7 +564,7 @@ def customer_growth(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def outstanding_aging(request):
     f = parse_filters(request)
     fin_qs = apply_financial_filters(
@@ -586,7 +586,7 @@ def outstanding_aging(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def doctor_prescription_trend(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.filter(doctor_id__isnull=False), f)
@@ -604,7 +604,7 @@ def doctor_prescription_trend(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def doctor_radar(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.filter(doctor_id__isnull=False), f)
@@ -644,7 +644,7 @@ def doctor_radar(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def returns_profit_impact(request):
     f = parse_filters(request)
     sales_qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -663,7 +663,7 @@ def returns_profit_impact(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f).order_by('-sale_date').values(
@@ -678,7 +678,7 @@ def detail(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def returns_detail(request):
     f = parse_filters(request)
     qs = _apply_returns_filters(ReportSalesReturns.objects.all(), f)

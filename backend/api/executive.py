@@ -2,7 +2,7 @@
 from decimal import Decimal
 from django.db.models import Sum, Count, Q, F
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 
 from reports.models import ReportSales, ReportFinancial, ReportGST, ReportInventory, ReportPurchases
@@ -13,7 +13,7 @@ from .helpers import (
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def kpis(request):
     f = parse_filters(request)
     sales_qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -62,7 +62,7 @@ def kpis(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def revenue_trend(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -77,7 +77,7 @@ def revenue_trend(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def channel_mix(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -91,7 +91,7 @@ def channel_mix(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def category_revenue(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -105,7 +105,7 @@ def category_revenue(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def top_products(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -119,7 +119,7 @@ def top_products(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def inventory_alerts(request):
     inv = ReportInventory.objects.filter(snapshot_date=ReportInventory.objects.values('snapshot_date').order_by('-snapshot_date').first()['snapshot_date']) if ReportInventory.objects.exists() else ReportInventory.objects.none()
 
@@ -134,7 +134,7 @@ def inventory_alerts(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def pending_actions(request):
     from decimal import Decimal
     f = parse_filters(request)
@@ -160,7 +160,7 @@ def pending_actions(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def today_sales(request):
     from datetime import date as dt_date, timedelta as td
     f = parse_filters(request)
@@ -207,7 +207,7 @@ def today_sales(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def filter_options(request):
     """Return dynamic filter options from the database."""
     locations = list(

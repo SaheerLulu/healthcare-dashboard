@@ -1,7 +1,7 @@
 """Audit & Data Health API endpoints."""
 from django.db.models import Count
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 
 from pipeline.models import PipelineLog, PipelineError
@@ -13,7 +13,7 @@ from reports.models import (
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def overview(request):
     total_runs = PipelineLog.objects.count()
     success_runs = PipelineLog.objects.filter(status='success').count()
@@ -59,7 +59,7 @@ def overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def data_quality(request):
     """Genuine multi-dimensional data quality score.
 
@@ -122,7 +122,7 @@ def data_quality(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def pipeline_status(request):
     logs = list(
         PipelineLog.objects
@@ -134,7 +134,7 @@ def pipeline_status(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def data_freshness(request):
     tables = {
         'report_sales': ReportSales.objects.count(),
@@ -156,7 +156,7 @@ def data_freshness(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def user_activity(request):
     """Return aggregated audit activity per user with the field shape the
     frontend expects: { user, role, logins }."""
@@ -182,7 +182,7 @@ def user_activity(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def detail(request):
     try:
         data = list(

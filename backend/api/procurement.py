@@ -1,7 +1,7 @@
 """Procurement Intelligence API endpoints."""
 from django.db.models import Sum, Count, Avg, Min, Max, Q
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
@@ -19,7 +19,7 @@ def _purchase_qs(f):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def supplier_scorecard(request):
     f = parse_filters(request)
     qs = _purchase_qs(f)
@@ -45,7 +45,7 @@ def supplier_scorecard(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def cost_comparison(request):
     f = parse_filters(request)
     qs = _purchase_qs(f)
@@ -66,7 +66,7 @@ def cost_comparison(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def price_trend(request):
     f = parse_filters(request)
     qs = _purchase_qs(f)
@@ -84,7 +84,7 @@ def price_trend(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def payment_terms(request):
     f = parse_filters(request)
     qs = _purchase_qs(f)
@@ -98,7 +98,7 @@ def payment_terms(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def lead_time(request):
     f = parse_filters(request)
     qs = _purchase_qs(f).filter(lead_time_days__isnull=False)
@@ -117,7 +117,7 @@ def lead_time(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def returns(request):
     f = parse_filters(request)
     qs = ReportPurchases.objects.filter(
@@ -135,7 +135,7 @@ def returns(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def overview(request):
     """Procurement overview KPIs."""
     f = parse_filters(request)
@@ -168,7 +168,7 @@ def overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def savings(request):
     """Synthetic savings-by-month from purchase volume × 2% target rate.
     Source DB has no actual savings tracking, so we model a plausible 2%
@@ -194,7 +194,7 @@ def savings(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def po_status(request):
     """PO status distribution."""
     f = parse_filters(request)
@@ -213,7 +213,7 @@ def po_status(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
     qs = ReportPurchases.objects.filter(

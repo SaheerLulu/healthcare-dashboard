@@ -2,7 +2,7 @@
 from decimal import Decimal
 from django.db.models import Sum, Count, Q, Avg
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
@@ -13,7 +13,7 @@ from .helpers import parse_filters
 # ─── GST ──────────────────────────────────────────────────────────────────────
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def gst_overview(request):
     f = parse_filters(request)
     start_period = f['start_date'][:7]
@@ -43,7 +43,7 @@ def gst_overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def gstr1(request):
     f = parse_filters(request)
     qs = ReportGST.objects.filter(
@@ -63,7 +63,7 @@ def gstr1(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def gstr3b(request):
     f = parse_filters(request)
     qs = ReportGST.objects.filter(
@@ -80,7 +80,7 @@ def gstr3b(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def itc(request):
     f = parse_filters(request)
     qs = ReportGST.objects.filter(
@@ -105,7 +105,7 @@ def itc(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def rcm(request):
     f = parse_filters(request)
     qs = ReportGST.objects.filter(
@@ -120,7 +120,7 @@ def rcm(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def gst_by_rate(request):
     f = parse_filters(request)
     qs = ReportGST.objects.filter(
@@ -140,7 +140,7 @@ def gst_by_rate(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def gst_detail(request):
     f = parse_filters(request)
     qs = ReportGST.objects.filter(
@@ -164,7 +164,7 @@ def gst_detail(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def gst_compliance_status(request):
     f = parse_filters(request)
     start_period = f['start_date'][:7]
@@ -184,7 +184,7 @@ def gst_compliance_status(request):
 # ─── TDS ──────────────────────────────────────────────────────────────────────
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def tds_overview(request):
     f = parse_filters(request)
     qs = ReportTDS.objects.filter(
@@ -210,7 +210,7 @@ def tds_overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def tds_deductions(request):
     f = parse_filters(request)
     qs = ReportTDS.objects.filter(
@@ -227,7 +227,7 @@ def tds_deductions(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def tds_challans(request):
     f = parse_filters(request)
     qs = ReportTDS.objects.filter(
@@ -242,7 +242,7 @@ def tds_challans(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def tds_by_section(request):
     f = parse_filters(request)
     qs = ReportTDS.objects.filter(
@@ -263,7 +263,7 @@ def tds_by_section(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def tds_trend(request):
     f = parse_filters(request)
     qs = ReportTDS.objects.filter(
@@ -279,7 +279,7 @@ def tds_trend(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def tds_detail(request):
     f = parse_filters(request)
     qs = ReportTDS.objects.filter(
