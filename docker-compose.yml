@@ -1,0 +1,77 @@
+# docker-compose for healthcare-dashboard — DASH-E20-F03.
+#
+# Three services:
+#   - backend  : Django + gunicorn on :8002
+#   - frontend : nginx serving the vite build, with /api/ proxied to backend
+#   - pipeline : a one-shot service that runs `run_all_pipelines --full`
+#                on cold start and exits; for periodic runs add a host cron
+#                that calls `docker compose exec backend python3
+#                manage.py run_all_pipelines`.
+#
+# Database: this stack expects the upstream healthcare-inventory-management
+# SQLite at $UPSTREAM_DB_PATH on the host, mounted read/write into both
+# backend and pipeline containers. SQLite is the dev/staging default; for
+# production switch to PostgreSQL via DJANGO_DB_PATH=postgres://… and an
+# external db service (out of scope for this compose).
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: seefmed/healthcare-dashboard-backend:latest
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
+      DJANGO_DEBUG: "False"
+      DJANGO_DB_PATH: /data/db.sqlite3
+      DASHBOARD_REQUIRE_AUTH: "1"
+      DASHBOARD_PERF_LOG: "1"
+      GUNICORN_WORKERS: "3"
+    volumes:
+      - ${UPSTREAM_DB_PATH:?UPSTREAM_DB_PATH must point at the shared SQLite}:/data/db.sqlite3
+    ports:
+      - "8002:8002"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8002/api/health/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  pipeline:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: seefmed/healthcare-dashboard-backend:latest
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
+      DJANGO_DEBUG: "False"
+      DJANGO_DB_PATH: /data/db.sqlite3
+    volumes:
+      - ${UPSTREAM_DB_PATH:?UPSTREAM_DB_PATH must point at the shared SQLite}:/data/db.sqlite3
+    # Run pipelines once on cold start and exit. Use this as a one-shot
+    # bootstrap; for ongoing 5-min syncs, run the same command from cron
+    # on the host (the in-memory threading approach in pipeline_api.py
+    # is fine for ad-hoc but not for unattended scheduled runs).
+    command: ["python3", "manage.py", "run_all_pipelines"]
+    restart: "no"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: seefmed/healthcare-dashboard-frontend:latest
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8082:80"
+    restart: unless-stopped
+
+# No volumes section: the shared SQLite is supplied by the host via
+# UPSTREAM_DB_PATH so it stays the single source of truth across the
+# inventory app, the accounting app and this dashboard.
