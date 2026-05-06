@@ -15,6 +15,8 @@ def _purchase_qs(f):
     )
     if 'location_id' in f:
         qs = qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        qs = qs.filter(location_id__in=f['location_ids'])
     return qs
 
 
@@ -125,6 +127,8 @@ def returns(request):
     )
     if 'location_id' in f:
         qs = qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        qs = qs.filter(location_id__in=f['location_ids'])
 
     data = list(
         qs.values('product_category')
@@ -201,6 +205,10 @@ def po_status(request):
     qs = ReportPurchases.objects.filter(
         bill_date__gte=f['start_date'], bill_date__lte=f['end_date'], is_return=False,
     )
+    if 'location_id' in f:
+        qs = qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        qs = qs.filter(location_id__in=f['location_ids'])
     data = list(
         qs.values('state')
         .annotate(count=Count('source_id', distinct=True))
@@ -221,6 +229,8 @@ def detail(request):
     ).order_by('-bill_date')
     if 'location_id' in f:
         qs = qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        qs = qs.filter(location_id__in=f['location_ids'])
     qs = qs.values(
         'bill_date', 'bill_no', 'supplier_name', 'product_name',
         'product_category', 'quantity', 'purchase_rate', 'mrp',

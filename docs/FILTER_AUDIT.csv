@@ -1,0 +1,74 @@
+page,endpoint,no_filters,status,verdict,default_count,shifted_count,bad_count
+ExecutiveSummary.tsx,/api/executive/kpis/,False,200/200/200,OK,0 rows · 7307218,0 rows · 2957637,0 rows · 0
+ExecutiveSummary.tsx,/api/executive/revenue-trend/,False,200/200/200,OK,3 rows · 5672227,1 rows · 2295068,0 rows · 0
+ExecutiveSummary.tsx,/api/executive/category-revenue/,False,200/200/200,OK,10 rows · 5672227,10 rows · 2295068,0 rows · 0
+ExecutiveSummary.tsx,/api/executive/inventory-alerts/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+ExecutiveSummary.tsx,/api/executive/pending-actions/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+ExecutiveSummary.tsx,/api/executive/today-sales/,False,200/200/200,OK,0 rows · 5672227,0 rows · 2295068,0 rows · 0
+FinancialDeepDive.tsx,/api/financial/pnl/,False,200/200/200,OK,0 rows · 7307218,0 rows · 2957637,0 rows · 0
+FinancialDeepDive.tsx,/api/financial/expense-breakdown/,False,200/200/200,STATIC,5 rows · 0,5 rows · 0,0 rows · 0
+FinancialDeepDive.tsx,/api/financial/cash-flow/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+FinancialDeepDive.tsx,/api/financial/profit-bridge/,False,200/200/200,PARTIAL,5 rows · 4765019,5 rows · 1927644,4 rows · 0
+GSTCompliance.tsx,/api/gst/overview/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+GSTCompliance.tsx,/api/gst/gstr3b/,False,200/200/200,STATIC,2 rows · 0,2 rows · 0,0 rows · 0
+GSTCompliance.tsx,/api/gst/rcm/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+GSTCompliance.tsx,/api/gst/compliance-status/,False,200/200/200,STATIC,2 rows · 0,2 rows · 0,0 rows · 0
+InventoryOperations.tsx,/api/inventory/overview/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+InventoryOperations.tsx,/api/inventory/expiry/,False,200/200/200,FAIL,5 rows · 10010728,5 rows · 10010728,5 rows · 0
+InventoryOperations.tsx,/api/inventory/dead-stock/,False,200/200/200,STATIC,1 rows · 16284,1 rows · 16284,0 rows · 0
+InventoryOperations.tsx,/api/inventory/batches/,False,200/200/200,STATIC,50 rows · 0,50 rows · 0,0 rows · 0
+InventoryOperations.tsx,/api/inventory/movement-trend/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+InventoryOperations.tsx,/api/inventory/stock-alerts/,False,200/200/200,STATIC,50 rows · 0,50 rows · 0,0 rows · 0
+InventoryOperations.tsx,/api/inventory/optimization/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+InventoryOperations.tsx,/api/inventory/forecast/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+InventoryOperations.tsx,/api/inventory/turnover/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+InventoryOperations.tsx,/api/inventory/batch-detail/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+InventoryOperations.tsx,/api/inventory/investment-detail/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+OtherPages.tsx,/api/tds/overview/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+OtherPages.tsx,/api/tds/challans/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+OtherPages.tsx,/api/working-capital/overview/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+OtherPages.tsx,/api/working-capital/payables/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+OtherPages.tsx,/api/location/comparison/,False,200/200/200,OK,2 rows · 5672227,2 rows · 2295068,0 rows · 0
+OtherPages.tsx,/api/product/overview/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+OtherPages.tsx,/api/product/pricing/,False,200/200/200,STATIC,10 rows · 0,10 rows · 0,0 rows · 0
+OtherPages.tsx,/api/dispatch/pipeline/,False,200/200/200,STATIC,4 rows · 0,4 rows · 0,0 rows · 0
+OtherPages.tsx,/api/loyalty/overview/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+OtherPages.tsx,/api/loyalty/redemption/,False,200/200/200,OK,3 rows · 0,1 rows · 0,0 rows · 0
+OtherPages.tsx,/api/audit/overview/,True,—,OPT-OUT,,,
+OtherPages.tsx,/api/audit/pipeline-status/,True,—,OPT-OUT,,,
+OtherPages.tsx,/api/audit/data-freshness/,True,—,OPT-OUT,,,
+OtherPages.tsx,/api/audit/data-quality/,True,—,OPT-OUT,,,
+OtherPages.tsx,/api/audit/user-activity/,True,—,OPT-OUT,,,
+OtherPages.tsx,/api/reconcile/summary/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+PipelineManagement.tsx,/api/pipeline/history/,True,—,OPT-OUT,,,
+PipelineManagement.tsx,/api/pipeline/errors/,True,—,OPT-OUT,,,
+PipelineManagement.tsx,/api/pipeline/progress/,True,—,OPT-OUT,,,
+ProcurementIntelligence.tsx,/api/procurement/overview/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+ProcurementIntelligence.tsx,/api/procurement/cost-comparison/,False,200/200/200,STATIC,10 rows · 0,10 rows · 0,0 rows · 0
+ProcurementIntelligence.tsx,/api/procurement/payment-terms/,False,200/200/200,OK,10 rows · 0,9 rows · 0,0 rows · 0
+ProcurementIntelligence.tsx,/api/procurement/savings/,False,200/200/200,OK,3 rows · 0,1 rows · 0,0 rows · 0
+ProcurementIntelligence.tsx,/api/procurement/po-status/,False,200/200/200,STATIC,1 rows · 0,1 rows · 0,0 rows · 0
+SalesCommandCenter.tsx,/api/sales/overview/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+SalesCommandCenter.tsx,/api/sales/hourly/,False,200/200/200,OK,10 rows · 5672227,10 rows · 2295068,0 rows · 0
+SalesCommandCenter.tsx,/api/sales/products/,False,200/200/200,OK,10 rows · 636185,10 rows · 291221,0 rows · 0
+SalesCommandCenter.tsx,/api/sales/customers/,False,200/200/200,OK,10 rows · 4429404,10 rows · 1818570,0 rows · 0
+SalesCommandCenter.tsx,/api/sales/doctors/,False,200/200/200,OK,8 rows · 1092043,8 rows · 494605,0 rows · 0
+SalesCommandCenter.tsx,/api/sales/returns/overview/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+SalesCommandCenter.tsx,/api/sales/slow-movers/,False,200/200/200,OK,10 rows · 78285,10 rows · 20406,0 rows · 0
+SalesCommandCenter.tsx,/api/sales/customer-growth/,False,200/200/200,OK,3 rows · 4946727,1 rows · 1974624,0 rows · 0
+SalesCommandCenter.tsx,/api/sales/doctor-prescription-trend/,False,200/200/200,OK,3 rows · 1092043,1 rows · 494605,0 rows · 0
+SalesCommandCenter.tsx,/api/sales/returns/by-category/,False,200/200/200,OK,6 rows · 6521,1 rows · 414,0 rows · 0
+AdditionalDetailPages.tsx,/api/tds/detail/,False,200/200/200,OK,50 rows · 63,23 rows · 23,0 rows · 0
+AdditionalDetailPages.tsx,/api/working-capital/receivables/,False,200/200/200,EMPTY,0 rows · 0,0 rows · 0,0 rows · 0
+AdditionalDetailPages.tsx,/api/location/detail/,False,200/200/200,OK,6 rows · 5672227,2 rows · 2295068,0 rows · 0
+AdditionalDetailPages.tsx,/api/product/detail/,False,200/200/200,OK,199 rows · 5672227,197 rows · 2295068,0 rows · 0
+AdditionalDetailPages.tsx,/api/dispatch/detail/,False,200/200/200,STATIC,50 rows · 0,50 rows · 0,0 rows · 0
+AdditionalDetailPages.tsx,/api/loyalty/detail/,False,200/200/200,OK,29 rows · 4946727,29 rows · 1974624,0 rows · 0
+AdditionalDetailPages.tsx,/api/audit/detail/,True,—,OPT-OUT,,,
+AdditionalDetailPages.tsx,/api/sales/returns/detail/,False,200/200/200,OK,17 rows · 17,1 rows · 1,0 rows · 0
+AdditionalDetailPages.tsx,/api/expense/detail/,False,200/200/200,OK,50 rows · 5815,50 rows · 2461,0 rows · 0
+OtherDetailPages.tsx,/api/inventory/detail/,False,200/200/200,STATIC,50 rows · 660,50 rows · 660,0 rows · 0
+OtherDetailPages.tsx,/api/procurement/detail/,False,200/200/200,OK,50 rows · 718,50 rows · 161,0 rows · 0
+OtherDetailPages.tsx,/api/financial/detail/,False,200/200/200,OK,50 rows · 28083,50 rows · 11985,0 rows · 0
+OtherDetailPages.tsx,/api/gst/detail/,False,200/200/200,OK,50 rows · 794,50 rows · 757,0 rows · 0
+SalesDetailData.tsx,/api/sales/detail/,False,200/200/200,OK,50 rows · 4782,50 rows · 2036,0 rows · 0

@@ -69,6 +69,10 @@ def gstr3b(request):
     qs = ReportGST.objects.filter(
         source_table='gstr3b', period__gte=f['start_date'][:7], period__lte=f['end_date'][:7],
     )
+    if 'location_id' in f:
+        qs = qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        qs = qs.filter(location_id__in=f['location_ids'])
 
     data = list(qs.values(
         'period', 'outward_taxable', 'cgst', 'sgst', 'igst',
@@ -145,7 +149,12 @@ def gst_detail(request):
     f = parse_filters(request)
     qs = ReportGST.objects.filter(
         period__gte=f['start_date'][:7], period__lte=f['end_date'][:7],
-    ).order_by('-period').values(
+    )
+    if 'location_id' in f:
+        qs = qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        qs = qs.filter(location_id__in=f['location_ids'])
+    qs = qs.order_by('-period').values(
         'source_table', 'period', 'invoice_no', 'invoice_type',
         'taxable_value', 'gst_rate', 'cgst', 'sgst', 'igst',
         'customer_gstin', 'supplier_gstin', 'location_name',
@@ -170,12 +179,17 @@ def gst_compliance_status(request):
     start_period = f['start_date'][:7]
     end_period = f['end_date'][:7]
 
+    qs = ReportGST.objects.filter(
+        source_table='gstr3b',
+        period__gte=start_period, period__lte=end_period,
+    )
+    if 'location_id' in f:
+        qs = qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        qs = qs.filter(location_id__in=f['location_ids'])
+
     data = list(
-        ReportGST.objects.filter(
-            source_table='gstr3b',
-            period__gte=start_period, period__lte=end_period,
-        )
-        .values('period', 'filing_status', 'filed_date', 'location_name')
+        qs.values('period', 'filing_status', 'filed_date', 'location_name')
         .order_by('period')
     )
     return Response(data)
@@ -284,7 +298,12 @@ def tds_detail(request):
     f = parse_filters(request)
     qs = ReportTDS.objects.filter(
         transaction_date__gte=f['start_date'], transaction_date__lte=f['end_date'],
-    ).order_by('-transaction_date').values(
+    )
+    if 'location_id' in f:
+        qs = qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        qs = qs.filter(location_id__in=f['location_ids'])
+    qs = qs.order_by('-transaction_date').values(
         'transaction_date', 'deductee_name', 'section', 'deductee_type',
         'nature_of_payment', 'gross_amount', 'tds_rate', 'tds_amount',
         'status', 'challan_no', 'challan_date', 'location_name',
