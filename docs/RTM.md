@@ -102,5 +102,5 @@ Stories with zero linked test cases (red): **0**
 | DASH-E20 | DASH-E20-F01 | #867 DASH-E20-F01-US03 — Server-side aggregation only | In progress | 5 | backend/api/middleware.py |  |
 | DASH-E20 | DASH-E20-F02 | #868 DASH-E20-F02-US01 — HTTP cache for filter-options endpoints | In progress | 5 | backend/api/middleware.py |  |
 | DASH-E20 | DASH-E20-F02 | #869 DASH-E20-F02-US02 — Per-user dashboard preferences cached | New | 5 | backend/api/middleware.py |  |
-| DASH-E20 | DASH-E20-F03 | #870 DASH-E20-F03-US01 — Container deployment alongside inventory + accounting | New | 5 | backend/start.sh |  |
-| DASH-E20 | DASH-E20-F03 | #871 DASH-E20-F03-US02 — Production PostgreSQL with materialised views (optional) | New | 5 | backend/start.sh |  |
+| DASH-E20 | DASH-E20-F03 | #870 DASH-E20-F03-US01 — Container deployment alongside inventory + accounting | In progress | 5 | backend/start.sh |  |
+| DASH-E20 | DASH-E20-F03 | #871 DASH-E20-F03-US02 — Production PostgreSQL with materialised views (optional) | In progress | 5 | backend/start.sh |  |

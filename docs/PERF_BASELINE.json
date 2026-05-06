@@ -11,9 +11,9 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 34.1,
-      "p95_ms": 34.1,
-      "max_ms": 37.4,
+      "p50_ms": 35.8,
+      "p95_ms": 35.8,
+      "max_ms": 39.1,
       "mean_sql": 6,
       "max_sql": 6
     },
@@ -23,9 +23,21 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 18.9,
-      "p95_ms": 18.9,
-      "max_ms": 27.4,
+      "p50_ms": 20.8,
+      "p95_ms": 20.8,
+      "max_ms": 23.7,
+      "mean_sql": 8,
+      "max_sql": 8
+    },
+    {
+      "path": "/api/working-capital/overview/",
+      "runs": 3,
+      "status_modes": [
+        200
+      ],
+      "p50_ms": 13.1,
+      "p95_ms": 13.1,
+      "max_ms": 13.9,
       "mean_sql": 8,
       "max_sql": 8
     },
@@ -35,23 +47,11 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 10.7,
-      "p95_ms": 10.7,
-      "max_ms": 12.0,
+      "p50_ms": 10.3,
+      "p95_ms": 10.3,
+      "max_ms": 12.3,
       "mean_sql": 11,
       "max_sql": 11
-    },
-    {
-      "path": "/api/working-capital/overview/",
-      "runs": 3,
-      "status_modes": [
-        200
-      ],
-      "p50_ms": 10.1,
-      "p95_ms": 10.1,
-      "max_ms": 11.8,
-      "mean_sql": 8,
-      "max_sql": 8
     },
     {
       "path": "/api/executive/kpis/",
@@ -59,9 +59,9 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 8.9,
-      "p95_ms": 8.9,
-      "max_ms": 9.1,
+      "p50_ms": 7.5,
+      "p95_ms": 7.5,
+      "max_ms": 7.7,
       "mean_sql": 4,
       "max_sql": 4
     },
@@ -71,23 +71,11 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 7.2,
-      "p95_ms": 7.2,
-      "max_ms": 7.4,
+      "p50_ms": 6.8,
+      "p95_ms": 6.8,
+      "max_ms": 8.4,
       "mean_sql": 3,
       "max_sql": 3
-    },
-    {
-      "path": "/api/financial/pnl/",
-      "runs": 3,
-      "status_modes": [
-        200
-      ],
-      "p50_ms": 5.6,
-      "p95_ms": 5.6,
-      "max_ms": 11.9,
-      "mean_sql": 2,
-      "max_sql": 2
     },
     {
       "path": "/api/reconcile/cash/",
@@ -95,9 +83,9 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 5.1,
-      "p95_ms": 5.1,
-      "max_ms": 5.2,
+      "p50_ms": 6.4,
+      "p95_ms": 6.4,
+      "max_ms": 7.4,
       "mean_sql": 1,
       "max_sql": 1
     },
@@ -107,9 +95,21 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 4.5,
-      "p95_ms": 4.5,
-      "max_ms": 5.9,
+      "p50_ms": 5.4,
+      "p95_ms": 5.4,
+      "max_ms": 8.6,
+      "mean_sql": 2,
+      "max_sql": 2
+    },
+    {
+      "path": "/api/financial/pnl/",
+      "runs": 3,
+      "status_modes": [
+        200
+      ],
+      "p50_ms": 5.1,
+      "p95_ms": 5.1,
+      "max_ms": 6.8,
       "mean_sql": 2,
       "max_sql": 2
     },
@@ -119,9 +119,21 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 4.3,
-      "p95_ms": 4.3,
-      "max_ms": 5.0,
+      "p50_ms": 4.1,
+      "p95_ms": 4.1,
+      "max_ms": 4.3,
+      "mean_sql": 1,
+      "max_sql": 1
+    },
+    {
+      "path": "/api/location/comparison/",
+      "runs": 3,
+      "status_modes": [
+        200
+      ],
+      "p50_ms": 4.1,
+      "p95_ms": 4.1,
+      "max_ms": 4.3,
       "mean_sql": 1,
       "max_sql": 1
     },
@@ -131,47 +143,11 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 3.9,
-      "p95_ms": 3.9,
-      "max_ms": 4.1,
+      "p50_ms": 4.0,
+      "p95_ms": 4.0,
+      "max_ms": 4.9,
       "mean_sql": 1,
       "max_sql": 1
-    },
-    {
-      "path": "/api/inventory/overview/",
-      "runs": 3,
-      "status_modes": [
-        200
-      ],
-      "p50_ms": 3.5,
-      "p95_ms": 3.5,
-      "max_ms": 4.4,
-      "mean_sql": 6,
-      "max_sql": 6
-    },
-    {
-      "path": "/api/location/comparison/",
-      "runs": 3,
-      "status_modes": [
-        200
-      ],
-      "p50_ms": 3.3,
-      "p95_ms": 3.3,
-      "max_ms": 3.4,
-      "mean_sql": 1,
-      "max_sql": 1
-    },
-    {
-      "path": "/api/procurement/overview/",
-      "runs": 3,
-      "status_modes": [
-        200
-      ],
-      "p50_ms": 3.2,
-      "p95_ms": 3.2,
-      "max_ms": 3.5,
-      "mean_sql": 7,
-      "max_sql": 7
     },
     {
       "path": "/api/loyalty/overview/",
@@ -179,23 +155,23 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 2.9,
-      "p95_ms": 2.9,
-      "max_ms": 3.2,
+      "p50_ms": 4.0,
+      "p95_ms": 4.0,
+      "max_ms": 4.6,
       "mean_sql": 4,
       "max_sql": 4
     },
     {
-      "path": "/api/executive/today-sales/",
+      "path": "/api/executive/filter-options/",
       "runs": 3,
       "status_modes": [
         200
       ],
-      "p50_ms": 2.8,
-      "p95_ms": 2.8,
-      "max_ms": 3.9,
-      "mean_sql": 3,
-      "max_sql": 3
+      "p50_ms": 3.6,
+      "p95_ms": 3.6,
+      "max_ms": 7.6,
+      "mean_sql": 4,
+      "max_sql": 4
     },
     {
       "path": "/api/product/overview/",
@@ -203,9 +179,21 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 2.8,
-      "p95_ms": 2.8,
-      "max_ms": 3.0,
+      "p50_ms": 3.5,
+      "p95_ms": 3.5,
+      "max_ms": 4.0,
+      "mean_sql": 6,
+      "max_sql": 6
+    },
+    {
+      "path": "/api/inventory/overview/",
+      "runs": 3,
+      "status_modes": [
+        200
+      ],
+      "p50_ms": 3.3,
+      "p95_ms": 3.3,
+      "max_ms": 4.3,
       "mean_sql": 6,
       "max_sql": 6
     },
@@ -215,11 +203,35 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 2.7,
-      "p95_ms": 2.7,
-      "max_ms": 2.8,
+      "p50_ms": 3.2,
+      "p95_ms": 3.2,
+      "max_ms": 3.6,
       "mean_sql": 1,
       "max_sql": 1
+    },
+    {
+      "path": "/api/executive/today-sales/",
+      "runs": 3,
+      "status_modes": [
+        200
+      ],
+      "p50_ms": 3.1,
+      "p95_ms": 3.1,
+      "max_ms": 3.3,
+      "mean_sql": 3,
+      "max_sql": 3
+    },
+    {
+      "path": "/api/executive/pending-actions/",
+      "runs": 3,
+      "status_modes": [
+        200
+      ],
+      "p50_ms": 3.0,
+      "p95_ms": 3.0,
+      "max_ms": 6.4,
+      "mean_sql": 5,
+      "max_sql": 5
     },
     {
       "path": "/api/executive/category-revenue/",
@@ -229,43 +241,19 @@
       ],
       "p50_ms": 2.7,
       "p95_ms": 2.7,
-      "max_ms": 2.9,
+      "max_ms": 3.0,
       "mean_sql": 1,
       "max_sql": 1
     },
     {
-      "path": "/api/executive/pending-actions/",
+      "path": "/api/procurement/supplier-scorecard/",
       "runs": 3,
       "status_modes": [
         200
       ],
       "p50_ms": 2.6,
       "p95_ms": 2.6,
-      "max_ms": 6.1,
-      "mean_sql": 5,
-      "max_sql": 5
-    },
-    {
-      "path": "/api/executive/filter-options/",
-      "runs": 3,
-      "status_modes": [
-        200
-      ],
-      "p50_ms": 2.6,
-      "p95_ms": 2.6,
-      "max_ms": 14.0,
-      "mean_sql": 4,
-      "max_sql": 4
-    },
-    {
-      "path": "/api/sales/payment-mix/",
-      "runs": 3,
-      "status_modes": [
-        200
-      ],
-      "p50_ms": 2.6,
-      "p95_ms": 2.6,
-      "max_ms": 3.0,
+      "max_ms": 3.2,
       "mean_sql": 1,
       "max_sql": 1
     },
@@ -277,33 +265,33 @@
       ],
       "p50_ms": 2.5,
       "p95_ms": 2.5,
-      "max_ms": 2.6,
+      "max_ms": 2.7,
       "mean_sql": 1,
       "max_sql": 1
     },
     {
-      "path": "/api/inventory/expiry/",
+      "path": "/api/procurement/overview/",
       "runs": 3,
       "status_modes": [
         200
       ],
-      "p50_ms": 2.3,
-      "p95_ms": 2.3,
+      "p50_ms": 2.5,
+      "p95_ms": 2.5,
       "max_ms": 2.9,
-      "mean_sql": 6,
-      "max_sql": 6
+      "mean_sql": 7,
+      "max_sql": 7
     },
     {
-      "path": "/api/audit/overview/",
+      "path": "/api/sales/payment-mix/",
       "runs": 3,
       "status_modes": [
         200
       ],
-      "p50_ms": 1.9,
-      "p95_ms": 1.9,
-      "max_ms": 10.6,
-      "mean_sql": 11,
-      "max_sql": 11
+      "p50_ms": 2.4,
+      "p95_ms": 2.4,
+      "max_ms": 2.5,
+      "mean_sql": 1,
+      "max_sql": 1
     },
     {
       "path": "/api/gst/overview/",
@@ -311,23 +299,23 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 1.8,
-      "p95_ms": 1.8,
-      "max_ms": 5.4,
+      "p50_ms": 2.1,
+      "p95_ms": 2.1,
+      "max_ms": 5.7,
       "mean_sql": 5,
       "max_sql": 5
     },
     {
-      "path": "/api/reconcile/sales/",
+      "path": "/api/inventory/expiry/",
       "runs": 3,
       "status_modes": [
         200
       ],
-      "p50_ms": 1.7,
-      "p95_ms": 1.7,
-      "max_ms": 2.1,
-      "mean_sql": 1,
-      "max_sql": 1
+      "p50_ms": 2.0,
+      "p95_ms": 2.0,
+      "max_ms": 2.2,
+      "mean_sql": 6,
+      "max_sql": 6
     },
     {
       "path": "/api/executive/inventory-alerts/",
@@ -335,35 +323,35 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 1.6,
-      "p95_ms": 1.6,
-      "max_ms": 5.4,
+      "p50_ms": 1.8,
+      "p95_ms": 1.8,
+      "max_ms": 6.0,
       "mean_sql": 7,
       "max_sql": 7
     },
     {
-      "path": "/api/procurement/supplier-scorecard/",
+      "path": "/api/audit/overview/",
       "runs": 3,
       "status_modes": [
         200
       ],
-      "p50_ms": 1.4,
-      "p95_ms": 1.4,
-      "max_ms": 1.5,
-      "mean_sql": 1,
-      "max_sql": 1
+      "p50_ms": 1.7,
+      "p95_ms": 1.7,
+      "max_ms": 6.2,
+      "mean_sql": 11,
+      "max_sql": 11
     },
     {
-      "path": "/api/inventory/by-category/",
+      "path": "/api/reconcile/sales/",
       "runs": 3,
       "status_modes": [
         200
       ],
-      "p50_ms": 1.3,
-      "p95_ms": 1.3,
-      "max_ms": 1.4,
-      "mean_sql": 2,
-      "max_sql": 2
+      "p50_ms": 1.6,
+      "p95_ms": 1.6,
+      "max_ms": 2.0,
+      "mean_sql": 1,
+      "max_sql": 1
     },
     {
       "path": "/api/tds/overview/",
@@ -371,9 +359,21 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 1.0,
-      "p95_ms": 1.0,
-      "max_ms": 1.3,
+      "p50_ms": 1.3,
+      "p95_ms": 1.3,
+      "max_ms": 2.3,
+      "mean_sql": 2,
+      "max_sql": 2
+    },
+    {
+      "path": "/api/inventory/by-category/",
+      "runs": 3,
+      "status_modes": [
+        200
+      ],
+      "p50_ms": 1.2,
+      "p95_ms": 1.2,
+      "max_ms": 1.5,
       "mean_sql": 2,
       "max_sql": 2
     },
@@ -383,23 +383,11 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 1.0,
-      "p95_ms": 1.0,
+      "p50_ms": 0.9,
+      "p95_ms": 0.9,
       "max_ms": 1.2,
       "mean_sql": 1,
       "max_sql": 1
-    },
-    {
-      "path": "/api/prefs/",
-      "runs": 3,
-      "status_modes": [
-        200
-      ],
-      "p50_ms": 0.9,
-      "p95_ms": 0.9,
-      "max_ms": 7.6,
-      "mean_sql": 2,
-      "max_sql": 4
     },
     {
       "path": "/api/health/data/",
@@ -407,9 +395,9 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 0.8,
-      "p95_ms": 0.8,
-      "max_ms": 1.1,
+      "p50_ms": 0.7,
+      "p95_ms": 0.7,
+      "max_ms": 0.8,
       "mean_sql": 2,
       "max_sql": 2
     },
@@ -421,7 +409,19 @@
       ],
       "p50_ms": 0.7,
       "p95_ms": 0.7,
-      "max_ms": 0.8,
+      "max_ms": 0.7,
+      "mean_sql": 1,
+      "max_sql": 1
+    },
+    {
+      "path": "/api/prefs/",
+      "runs": 3,
+      "status_modes": [
+        200
+      ],
+      "p50_ms": 0.7,
+      "p95_ms": 0.7,
+      "max_ms": 1.0,
       "mean_sql": 1,
       "max_sql": 1
     },
@@ -431,9 +431,9 @@
       "status_modes": [
         200
       ],
-      "p50_ms": 0.5,
-      "p95_ms": 0.5,
-      "max_ms": 0.6,
+      "p50_ms": 0.3,
+      "p95_ms": 0.3,
+      "max_ms": 0.3,
       "mean_sql": 1,
       "max_sql": 1
     }
