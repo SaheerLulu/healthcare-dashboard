@@ -186,7 +186,10 @@ export const FilterSidebar = ({ isOpen, onToggle }: FilterSidebarProps) => {
       {/* Toggle tab */}
       <button
         onClick={onToggle}
-        className={`fixed top-[160px] z-30 p-1.5 transition-[left] duration-300 ease-in-out ${
+        aria-label={isOpen ? 'Collapse filter sidebar' : 'Expand filter sidebar'}
+        aria-expanded={isOpen}
+        aria-controls="filter-sidebar-nav"
+        className={`fixed top-[160px] z-30 p-1.5 transition-[left] duration-300 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 ${
           isOpen ? 'left-[280px]' : 'left-0'
         }`}
         style={{
@@ -206,6 +209,9 @@ export const FilterSidebar = ({ isOpen, onToggle }: FilterSidebarProps) => {
       </button>
 
       <aside
+        id="filter-sidebar-nav"
+        aria-label="Global and page filters"
+        aria-hidden={!isOpen}
         className={`fixed left-0 top-[64px] h-[calc(100vh-64px)] w-[280px] flex flex-col overflow-hidden transition-transform duration-300 ease-in-out ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}

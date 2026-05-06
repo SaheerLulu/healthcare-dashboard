@@ -29,12 +29,26 @@ export const Layout = () => {
 
   return (
     <div className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--surface-1)' }}>
+      {/* Skip link — DASH-E00-A06 keyboard navigation requirement.
+          Hidden until focused so keyboard-only users can jump past the
+          sidebar/topbar nav directly to the dashboard content. */}
+      <a
+        href="#main-content"
+        className="absolute left-2 top-2 z-[100] px-3 py-2 bg-teal-700 text-white rounded-md text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-white -translate-y-16 focus:translate-y-0 transition-transform"
+      >
+        Skip to main content
+      </a>
+
       <TopBar />
 
       <div className="flex flex-1">
         <FilterSidebar isOpen={sidebarOpen} onToggle={() => setSidebarOpen(prev => !prev)} />
 
-        <main className={`flex-1 min-w-0 transition-[margin-left] duration-300 ease-in-out ${sidebarOpen ? 'ml-[280px]' : 'ml-0'}`}>
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className={`flex-1 min-w-0 transition-[margin-left] duration-300 ease-in-out ${sidebarOpen ? 'ml-[280px]' : 'ml-0'}`}
+        >
           {activeFilters.length > 0 && <SelectionToolbar />}
 
           <div className="p-6">
