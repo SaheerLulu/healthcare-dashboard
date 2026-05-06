@@ -894,9 +894,42 @@ export const AuditDataHealth = () => {
   const { data: apiFreshness } = useApiData<any>('/audit/data-freshness/', {}, { noFilters: true });
   const { data: apiDataQuality } = useApiData<any[]>('/audit/data-quality/', [], { noFilters: true });
   const { data: apiUserActivity } = useApiData<any[]>('/audit/user-activity/', [], { noFilters: true });
+  // Reconciliation summary — DASH-E00-A07. Compares dashboard vs upstream
+  // for sales/gst/cash and exposes a single overall verdict.
+  const { data: apiReconcile } = useApiData<any>(
+    '/reconcile/summary/',
+    { overall: 'unknown', items: [] },
+  );
 
   const dataQualityMetrics = apiDataQuality.map(numericize);
   const userActivityData = apiUserActivity.map(numericize);
+
+  const verdictBadge = (v: string) => {
+    const cfg: Record<string, { label: string; bg: string; fg: string }> = {
+      pass:    { label: 'pass',    bg: 'rgba(15, 157, 154, 0.12)', fg: 'var(--brand-press)' },
+      amber:   { label: 'amber',   bg: 'rgba(245, 158, 11, 0.12)', fg: '#B45309' },
+      fail:    { label: 'fail',    bg: 'rgba(192, 57, 43, 0.12)',  fg: 'var(--danger)' },
+      unknown: { label: 'n/a',     bg: 'rgba(107, 114, 128, 0.12)', fg: '#374151' },
+    };
+    const c = cfg[v] || cfg.unknown;
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-full uppercase tracking-wide"
+        style={{ backgroundColor: c.bg, color: c.fg }}
+      >
+        {c.label}
+      </span>
+    );
+  };
+
+  const fmtRupees = (n: number) => {
+    const v = Math.abs(n);
+    const sign = n < 0 ? '-' : '';
+    if (v >= 1_00_00_000) return `${sign}₹${(v / 1_00_00_000).toFixed(2)}Cr`;
+    if (v >= 1_00_000) return `${sign}₹${(v / 1_00_000).toFixed(2)}L`;
+    if (v >= 1_000) return `${sign}₹${(v / 1_000).toFixed(1)}K`;
+    return `${sign}₹${v.toFixed(0)}`;
+  };
 
   return (
     <div>
@@ -913,6 +946,55 @@ export const AuditDataHealth = () => {
         <KPICard title="Active Users" value={String(apiAuditOverview.active_users ?? 0)} subtitle={apiAuditOverview.active_users_subtitle || ''} trend={{ value: apiAuditOverview.active_users_trend || '0', direction: 'up' }} />
         <KPICard title="Failed Syncs" value={String(apiAuditOverview.failed_syncs ?? 0)} subtitle={apiAuditOverview.failed_syncs_subtitle || ''} trend={{ value: apiAuditOverview.failed_syncs_trend || '0', direction: 'down' }} />
         <KPICard title="Audit Trail" value={apiAuditOverview.audit_trail_display || '0'} subtitle={apiAuditOverview.audit_trail_subtitle || ''} trend={{ value: apiAuditOverview.audit_trail_trend || '0%', direction: 'up' }} />
+      </div>
+
+      {/* Reconciliation Status — DASH-E00-A07 */}
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-gray-900">Reconciliation Status</h3>
+          <span className="flex items-center gap-2 text-xs text-gray-600">
+            Overall {verdictBadge(apiReconcile.overall)}
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-200">
+                <th className="text-left py-2 px-2 font-medium text-gray-600">Metric</th>
+                <th className="text-right py-2 px-2 font-medium text-gray-600">Dashboard</th>
+                <th className="text-right py-2 px-2 font-medium text-gray-600">Source</th>
+                <th className="text-right py-2 px-2 font-medium text-gray-600">Variance</th>
+                <th className="text-right py-2 px-2 font-medium text-gray-600">Threshold</th>
+                <th className="text-center py-2 px-2 font-medium text-gray-600">Verdict</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(apiReconcile.items || []).map((it: any) => (
+                <tr key={it.metric} className="border-b border-gray-100">
+                  <td className="py-2 px-2 font-mono text-gray-900">{it.metric}</td>
+                  <td className="py-2 px-2 text-right">{fmtRupees(Number(it.dashboard_value || 0))}</td>
+                  <td className="py-2 px-2 text-right text-gray-500">
+                    {it.source_available ? fmtRupees(Number(it.source_value || 0)) : '—'}
+                  </td>
+                  <td className="py-2 px-2 text-right">{fmtRupees(Number(it.variance || 0))}</td>
+                  <td className="py-2 px-2 text-right text-gray-500">{fmtRupees(Number(it.threshold || 0))}</td>
+                  <td className="py-2 px-2 text-center">{verdictBadge(it.verdict)}</td>
+                </tr>
+              ))}
+              {(!apiReconcile.items || apiReconcile.items.length === 0) && (
+                <tr>
+                  <td colSpan={6} className="py-4 text-center text-gray-500">
+                    Reconciliation data not yet available for this period.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-xs text-gray-500 mt-3">
+          Sources marked <span className="font-mono">—</span> use stub comparators; the upstream
+          accounting/GST preview APIs are not yet wired (tracked under DASH-E00-A09).
+        </p>
       </div>
 
       <div className="grid grid-cols-2 gap-4 mb-6">
