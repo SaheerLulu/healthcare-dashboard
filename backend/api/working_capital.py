@@ -2,7 +2,7 @@
 from datetime import date
 from django.db.models import Sum, Q
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 
 from reports.models import ReportFinancial, ReportSales, ReportPurchases, ReportInventory
@@ -24,7 +24,7 @@ def _fmt_inr(value):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def overview(request):
     f = parse_filters(request)
     fin_qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
@@ -91,7 +91,7 @@ def overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def receivables(request):
     f = parse_filters(request)
     qs = apply_financial_filters(
@@ -117,7 +117,7 @@ def receivables(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def payables(request):
     f = parse_filters(request)
     qs = apply_financial_filters(
@@ -140,7 +140,7 @@ def payables(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def ccc(request):
     """Cash conversion cycle: DIO + DSO - DPO."""
     f = parse_filters(request)

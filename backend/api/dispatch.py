@@ -6,7 +6,7 @@ with the same data return the same result."""
 from datetime import timedelta
 from django.db.models import Count, Avg, Sum, Q
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 
 from source_models.models import DispatchEntryRO, B2BSalesOrderRO
@@ -75,7 +75,7 @@ def _entries(filters):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def pipeline(request):
     f = parse_filters(request)
     entries = _entries(f)
@@ -98,7 +98,7 @@ def pipeline(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def courier_performance(request):
     f = parse_filters(request)
     entries = _entries(f)
@@ -136,7 +136,7 @@ def courier_performance(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
     entries = _entries(f)

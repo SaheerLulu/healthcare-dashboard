@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from django.db.models import Sum, Count, Avg, Q, F, Max, Min, StdDev
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
@@ -84,7 +84,7 @@ def _apply_inventory_filters(qs, f):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def overview(request):
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f)
@@ -166,7 +166,7 @@ def overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def by_category(request):
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f)
@@ -192,7 +192,7 @@ def by_category(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def expiry(request):
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f)
@@ -224,7 +224,7 @@ def expiry(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def movement_trend(request):
     f = parse_filters(request)
 
@@ -306,7 +306,7 @@ def movement_trend(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def abc_ved(request):
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f)
@@ -349,7 +349,7 @@ def abc_ved(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def dead_stock(request):
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f).filter(
@@ -387,7 +387,7 @@ def dead_stock(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def forecast(request):
     """Demand forecast, seasonality, accuracy and safety-stock analysis."""
     f = parse_filters(request)
@@ -562,7 +562,7 @@ def forecast(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def efficiency(request):
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f)
@@ -588,7 +588,7 @@ def efficiency(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def batches(request):
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f).filter(batch_no__gt='')
@@ -605,7 +605,7 @@ def batches(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def investment(request):
     """Investment snapshot: by category + location, enriched with monthly profit and ROI."""
     f = parse_filters(request)
@@ -701,7 +701,7 @@ def investment(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def stock_alerts(request):
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f)
@@ -757,7 +757,7 @@ def stock_alerts(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def carrying_cost(request):
     """Monthly carrying cost trend for the last 6 months.
 
@@ -832,7 +832,7 @@ def carrying_cost(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def optimization(request):
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f).filter(qty_on_hand__gt=0)
@@ -933,7 +933,7 @@ def optimization(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def turnover(request):
     """Turnover & GMROI dashboard with trend, category, velocity, working-capital and radar."""
     f = parse_filters(request)
@@ -1142,7 +1142,7 @@ def turnover(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def batch_detail(request):
     """Batch tracking dashboard — aging distribution, FIFO trend, supplier scorecard, batch list."""
     f = parse_filters(request)
@@ -1308,7 +1308,7 @@ def batch_detail(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def investment_detail(request):
     """Investment & ROI dashboard: supplier/location/velocity splits, ROI trend, scatter, benchmarks, optimization."""
     f = parse_filters(request)
@@ -1599,7 +1599,7 @@ def investment_detail(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def detail_view(request):
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f).order_by('-stock_value_cost')

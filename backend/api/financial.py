@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from django.db.models import Sum, Q
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
@@ -44,7 +44,7 @@ def _recent_months(start_date_iso, end_date_iso):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def pnl(request):
     f = parse_filters(request)
     qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
@@ -76,7 +76,7 @@ def pnl(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def pnl_trend(request):
     f = parse_filters(request)
     qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
@@ -121,7 +121,7 @@ def pnl_trend(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def expense_breakdown(request):
     f = parse_filters(request)
     qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True, account_type='EXPENSE'), f)
@@ -135,7 +135,7 @@ def expense_breakdown(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def balance_sheet(request):
     f = parse_filters(request)
     qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
@@ -219,7 +219,7 @@ def balance_sheet(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def cash_flow(request):
     """Cash-flow statement split into operating / investing / financing buckets,
     returned as both overall totals and a month-by-month trend."""
@@ -297,7 +297,7 @@ def cash_flow(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def ratios(request):
     """Financial ratios — returns current values plus a month-by-month trend."""
     f = parse_filters(request)
@@ -380,7 +380,7 @@ def ratios(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def profit_bridge(request):
     f = parse_filters(request)
     qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
@@ -423,7 +423,7 @@ def profit_bridge(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def expense_detail(request):
     f = parse_filters(request)
     qs = apply_financial_filters(
@@ -439,7 +439,7 @@ def expense_detail(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
     qs = apply_financial_filters(ReportFinancial.objects.all(), f).order_by('-entry_date').values(

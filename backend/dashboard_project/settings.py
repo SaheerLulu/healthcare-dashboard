@@ -124,12 +124,22 @@ CORS_ALLOW_ALL_ORIGINS = True
 # ---------------------------------------------------------------------------
 # REST Framework
 # ---------------------------------------------------------------------------
+# Dashboard auth gate — when False (default), every endpoint behaves like
+# AllowAny; when True, ``DashboardPermission`` requires a valid JWT. The
+# DASH-E00-A04 NFR mandates True before GA. Toggle via env var so local
+# dev stays open without local config edits.
+DASHBOARD_REQUIRE_AUTH = os.environ.get('DASHBOARD_REQUIRE_AUTH', '').lower() in (
+    'true',
+    '1',
+    'yes',
+)
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',
+        'api.permissions.DashboardPermission',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,

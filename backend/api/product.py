@@ -1,7 +1,7 @@
 """Product Intelligence API endpoints."""
 from django.db.models import Sum, Count, Avg, Max, Min
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 
 from reports.models import ReportSales, ReportInventory, ReportPurchases
@@ -20,7 +20,7 @@ def _fmt_inr(value):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def overview(request):
     f = parse_filters(request)
 
@@ -59,7 +59,7 @@ def overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def lifecycle(request):
     """Classify products by lifecycle stage and aggregate counts per stage.
     The Pie chart on /product expects one slice per stage, not per product."""
@@ -104,7 +104,7 @@ def lifecycle(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def pricing(request):
     f = parse_filters(request)
 
@@ -146,7 +146,7 @@ def pricing(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)

@@ -1,7 +1,7 @@
 """Loyalty Analytics API endpoints."""
 from django.db.models import Sum, Count, Avg
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from .permissions import DashboardPermission
 from rest_framework.response import Response
 
 from reports.models import ReportSales
@@ -23,7 +23,7 @@ def _fmt_num(value):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def overview(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f)
@@ -79,7 +79,7 @@ def overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def tiers(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f)
@@ -98,7 +98,7 @@ def tiers(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def redemption(request):
     f = parse_filters(request)
     base_qs = apply_common_filters(ReportSales.objects.all(), f)
@@ -134,7 +134,7 @@ def redemption(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f)
