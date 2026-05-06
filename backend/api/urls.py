@@ -1,9 +1,14 @@
 from django.urls import path
 from api import executive, sales, financial, inventory, procurement
 from api import compliance, working_capital, location, product
-from api import dispatch, loyalty, audit, pipeline_api
+from api import dispatch, loyalty, audit, pipeline_api, health
 
 urlpatterns = [
+    # ─── Health & Freshness (DASH-E00-A05 reliability probe) ──────────
+    path('health/', health.liveness),
+    path('health/data/', health.data_freshness),
+
+
     # ─── Executive Summary ────────────────────────────────────────────
     path('executive/kpis/', executive.kpis),
     path('executive/revenue-trend/', executive.revenue_trend),
