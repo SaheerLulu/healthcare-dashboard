@@ -457,3 +457,28 @@ class ReportTDS(models.Model):
         indexes = [
             models.Index(fields=['transaction_month', 'section']),
         ]
+
+
+class DashboardPref(models.Model):
+    """Per-user dashboard preferences (DASH-E20-F02-US02).
+
+    Stored as a single row per user with a small JSON blob; we don't
+    enumerate every key as a column because the set churns. Concrete
+    keys consumed by the frontend:
+
+      - default_quick_preset  : 'Last 6 Months' | 'This Month' | …
+      - sidebar_open          : bool
+      - theme                 : 'light' | 'dark' | 'system'
+      - default_location_id   : int | null
+      - chart_density         : 'compact' | 'cosy' | 'comfortable'
+    """
+
+    user_id = models.IntegerField(unique=True, db_index=True)
+    prefs = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'dashboard_pref'
+
+    def __str__(self):
+        return f"DashboardPref(user_id={self.user_id})"

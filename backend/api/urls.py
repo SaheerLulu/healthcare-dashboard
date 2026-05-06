@@ -1,7 +1,7 @@
 from django.urls import path
 from api import executive, sales, financial, inventory, procurement
 from api import compliance, working_capital, location, product
-from api import dispatch, loyalty, audit, pipeline_api, health, reconcile
+from api import dispatch, loyalty, audit, pipeline_api, health, reconcile, prefs as prefs_api
 
 urlpatterns = [
     # ─── Health & Freshness (DASH-E00-A05 reliability probe) ──────────
@@ -150,4 +150,7 @@ urlpatterns = [
     path('reconcile/gst/', reconcile.reconcile_gst),
     path('reconcile/cash/', reconcile.reconcile_cash),
     path('reconcile/summary/', reconcile.reconcile_summary),
+
+    # ─── User Preferences (DASH-E20-F02-US02) ────────────────────────
+    path('prefs/', prefs_api.prefs),
 ]
