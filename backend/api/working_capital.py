@@ -186,3 +186,79 @@ def ccc(request):
         'dpo': round(dpo, 1),
         'ccc': round(ccc_val, 1),
     })
+
+
+@api_view(['GET'])
+@permission_classes([DashboardPermission])
+def runway(request):
+    """Cash runway projection (DASH-E11-F01-US03).
+
+    runway_months = current_cash / avg_monthly_net_outflow.
+
+    Burn rate is the average net cash outflow over the last 6 months
+    derived from ReportFinancial: sum(credit-debit) on Cash + Bank
+    accounts gives net outflow per month (a positive number means
+    cash decreased). If the trailing burn is zero or negative
+    (cash inflowing) we report "indefinite" — runway is meaningless
+    in that case.
+    """
+    from datetime import timedelta
+    today = date.today()
+    six_months_ago = today - timedelta(days=180)
+
+    fin_qs = ReportFinancial.objects.filter(
+        is_posted=True,
+        account_subtype__in=['Cash', 'Bank'],
+        entry_date__gte=six_months_ago,
+        entry_date__lte=today,
+    )
+
+    # Current cash position uses the full posted history (not just the
+    # window) so the balance reflects opening + period activity.
+    current_cash = float(
+        ReportFinancial.objects.filter(
+            is_posted=True, account_subtype__in=['Cash', 'Bank']
+        ).aggregate(total=Sum('debit') - Sum('credit'))['total'] or 0
+    )
+
+    # Net monthly cash flow per posting month: positive = inflow.
+    monthly = (
+        fin_qs.values('entry_month')
+        .annotate(net_flow=Sum('debit') - Sum('credit'))
+        .order_by('entry_month')
+    )
+    months = list(monthly)
+    avg_net_flow = (
+        sum(float(m['net_flow'] or 0) for m in months) / len(months)
+        if months else 0.0
+    )
+    # Burn = -avg_net_flow when negative (i.e. money leaving the bank).
+    burn = -avg_net_flow if avg_net_flow < 0 else 0.0
+
+    if burn > 0:
+        runway_months = round(current_cash / burn, 1)
+        verdict = 'critical' if runway_months < 3 else 'amber' if runway_months < 6 else 'healthy'
+        runway_display = f'{runway_months:.1f} months'
+    else:
+        runway_months = None
+        verdict = 'healthy'
+        runway_display = '∞ (cash growing)'
+
+    return Response({
+        'current_cash': current_cash,
+        'current_cash_display': _fmt_inr(current_cash),
+        'avg_monthly_net_flow': round(avg_net_flow, 2),
+        'avg_monthly_burn': round(burn, 2),
+        'avg_monthly_burn_display': _fmt_inr(burn),
+        'runway_months': runway_months,
+        'runway_display': runway_display,
+        'verdict': verdict,
+        'months_observed': len(months),
+        'monthly_series': [
+            {
+                'month': m['entry_month'],
+                'net_flow': float(m['net_flow'] or 0),
+            }
+            for m in months
+        ],
+    })

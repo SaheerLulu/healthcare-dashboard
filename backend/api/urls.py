@@ -68,6 +68,7 @@ urlpatterns = [
     path('inventory/carrying-cost/', inventory.carrying_cost),
     path('inventory/optimization/', inventory.optimization),
     path('inventory/turnover/', inventory.turnover),
+    path('inventory/days-of-cover/', inventory.days_of_cover),
     path('inventory/batch-detail/', inventory.batch_detail),
     path('inventory/investment-detail/', inventory.investment_detail),
     path('inventory/detail/', inventory.detail_view),
@@ -108,16 +109,19 @@ urlpatterns = [
     path('working-capital/receivables/', working_capital.receivables),
     path('working-capital/payables/', working_capital.payables),
     path('working-capital/ccc/', working_capital.ccc),
+    path('working-capital/runway/', working_capital.runway),
 
     # ─── Location Benchmarking ────────────────────────────────────────
     path('location/comparison/', location.comparison),
     path('location/trend/', location.trend),
+    path('location/radar/', location.radar),
     path('location/detail/', location.detail),
 
     # ─── Product Intelligence ─────────────────────────────────────────
     path('product/overview/', product.overview),
     path('product/lifecycle/', product.lifecycle),
     path('product/pricing/', product.pricing),
+    path('product/substitutability/', product.substitutability),
     path('product/detail/', product.detail),
 
     # ─── Dispatch & Fulfillment ───────────────────────────────────────
@@ -129,6 +133,7 @@ urlpatterns = [
     path('loyalty/overview/', loyalty.overview),
     path('loyalty/tiers/', loyalty.tiers),
     path('loyalty/redemption/', loyalty.redemption),
+    path('loyalty/rfm/', loyalty.rfm),
     path('loyalty/detail/', loyalty.detail),
 
     # ─── Audit & Data Health ──────────────────────────────────────────
@@ -137,6 +142,7 @@ urlpatterns = [
     path('audit/pipeline-status/', audit.pipeline_status),
     path('audit/data-freshness/', audit.data_freshness),
     path('audit/user-activity/', audit.user_activity),
+    path('audit/anomalies/', audit.anomalies),
     path('audit/detail/', audit.detail),
 
     # ─── Pipeline Management ─────────────────────────────────────────
