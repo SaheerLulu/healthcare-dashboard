@@ -147,6 +147,86 @@ def pricing(request):
 
 @api_view(['GET'])
 @permission_classes([DashboardPermission])
+def substitutability(request):
+    """Substitutability / generic share (DASH-E13-F01-US02).
+
+    For each molecule (active ingredient) compute:
+      - companies        : distinct count of brands selling it
+      - revenue          : total in the period
+      - top_company      : highest-revenue brand for that molecule
+      - top_share_pct    : top brand's share of the molecule's revenue
+      - is_generic_market: companies >= 2 (multiple brands compete)
+
+    Headline numbers:
+      - generic_revenue_share : % of revenue in molecules with >=2 brands
+      - top1_concentration_avg: avg(top brand share) across molecules
+        (lower = more substitutable, higher = more brand-locked)
+
+    Molecules with empty / null are excluded so the report stays clean.
+    """
+    f = parse_filters(request)
+    qs = apply_common_filters(ReportSales.objects.all(), f).exclude(product_molecule='')
+
+    # Per-molecule × per-brand revenue.
+    rows = list(
+        qs.values('product_molecule', 'product_company')
+        .annotate(revenue=Sum('line_total'), qty=Sum('quantity'))
+    )
+    if not rows:
+        return Response({
+            'generic_revenue_share': 0.0,
+            'top1_concentration_avg': 0.0,
+            'molecules': [],
+        })
+
+    by_mol: dict = {}
+    for r in rows:
+        mol = r['product_molecule']
+        by_mol.setdefault(mol, []).append(r)
+
+    molecules = []
+    grand_total = 0.0
+    generic_total = 0.0
+    top_share_sum = 0.0
+    top_share_n = 0
+    for mol, brands in by_mol.items():
+        brand_count = len(brands)
+        rev = sum(float(b['revenue'] or 0) for b in brands)
+        if rev <= 0:
+            continue
+        brands_sorted = sorted(brands, key=lambda b: float(b['revenue'] or 0), reverse=True)
+        top = brands_sorted[0]
+        top_rev = float(top['revenue'] or 0)
+        top_share = (top_rev / rev * 100.0) if rev else 0.0
+        is_generic = brand_count >= 2
+
+        grand_total += rev
+        if is_generic:
+            generic_total += rev
+        top_share_sum += top_share
+        top_share_n += 1
+
+        molecules.append({
+            'molecule': mol,
+            'companies': brand_count,
+            'revenue': round(rev, 2),
+            'top_company': top['product_company'] or '—',
+            'top_share_pct': round(top_share, 2),
+            'is_generic_market': is_generic,
+        })
+
+    molecules.sort(key=lambda m: m['revenue'], reverse=True)
+
+    return Response({
+        'generic_revenue_share': round(generic_total / grand_total * 100.0, 2) if grand_total else 0.0,
+        'top1_concentration_avg': round(top_share_sum / top_share_n, 2) if top_share_n else 0.0,
+        'molecules_total': len(molecules),
+        'molecules': molecules[:int(request.query_params.get('limit') or 50)],
+    })
+
+
+@api_view(['GET'])
+@permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.all(), f)

@@ -1600,6 +1600,61 @@ def investment_detail(request):
 
 @api_view(['GET'])
 @permission_classes([DashboardPermission])
+def days_of_cover(request):
+    """Per-SKU days-of-cover (DASH-E07-F01-US04).
+
+    days_of_cover = qty_on_hand / avg_daily_demand. The pipeline
+    materialises both fields plus ``days_of_stock`` as a derived
+    integer; we expose a sorted list (lowest first = most urgent),
+    aggregated to product level when stock is split across batches.
+
+    Query params:
+      - limit (default 50)
+      - max_days (default 365) — drop SKUs already past this so the
+        response stays focused on actionable items.
+      - location_id / location_ids — standard filter contract.
+    """
+    f = parse_filters(request)
+    qs = _apply_inventory_filters(_latest_snapshot(), f)
+    max_days = int(request.query_params.get('max_days') or 365)
+    limit = int(request.query_params.get('limit') or 50)
+
+    # Aggregate batches into one row per product+location. days_of_cover
+    # for a multi-batch SKU is sum(qty)/avg(demand) — using the per-row
+    # min would underestimate when one batch is small but others cover.
+    rows = list(
+        qs.values('product_id', 'product_name', 'product_category', 'location_name')
+        .annotate(
+            qty_on_hand=Sum('qty_on_hand'),
+            avg_daily_demand=Avg('avg_daily_demand'),
+            stock_value_cost=Sum('stock_value_cost'),
+        )
+        .filter(qty_on_hand__gt=0)
+    )
+
+    out = []
+    for r in rows:
+        demand = float(r['avg_daily_demand'] or 0)
+        qty = int(r['qty_on_hand'] or 0)
+        if demand <= 0:
+            doc = 9999  # never-moving SKUs sentinel; matches days_of_stock convention
+        else:
+            doc = round(qty / demand, 1)
+        if doc > max_days:
+            continue
+        out.append({
+            **r,
+            'avg_daily_demand': float(demand),
+            'days_of_cover': doc,
+            'urgency': 'critical' if doc <= 7 else 'low' if doc <= 30 else 'ok',
+        })
+
+    out.sort(key=lambda x: (x['days_of_cover'], -float(x.get('stock_value_cost') or 0)))
+    return Response({'count': len(out), 'results': out[:limit]})
+
+
+@api_view(['GET'])
+@permission_classes([DashboardPermission])
 def detail_view(request):
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f).order_by('-stock_value_cost')

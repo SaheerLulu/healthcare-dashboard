@@ -45,11 +45,17 @@ SMOKE_ENDPOINTS = [
     "/api/tds/overview/",
     # Working capital + location + product + dispatch + loyalty + audit
     "/api/working-capital/overview/",
+    "/api/working-capital/runway/",
     "/api/location/comparison/",
+    "/api/location/radar/",
     "/api/product/overview/",
+    "/api/product/substitutability/",
     "/api/dispatch/pipeline/",
     "/api/loyalty/overview/",
+    "/api/loyalty/rfm/",
     "/api/audit/overview/",
+    "/api/audit/anomalies/",
+    "/api/inventory/days-of-cover/",
     # Pipeline + health + reconcile + prefs
     "/api/pipeline/history/",
     "/api/pipeline/errors/",

@@ -135,6 +135,120 @@ def redemption(request):
 
 @api_view(['GET'])
 @permission_classes([DashboardPermission])
+def rfm(request):
+    """RFM segmentation (DASH-E15-F01-US02).
+
+    Recency  : days since last purchase
+    Frequency: distinct order count in the period
+    Monetary : total revenue in the period
+
+    Each is bucketed into a 1-5 score (5 = best). Combined RFM score
+    drives segment labels in line with standard CRM practice:
+
+      Champions       : R=5, F+M >= 8
+      Loyal           : F=5, otherwise
+      Potential       : R=5, F<=2 (newer customers)
+      At-Risk         : R<=2, F+M >= 6 (was active, drifted)
+      Lost            : R=1, F+M <= 4
+      Hibernating     : default fallthrough
+
+    Buckets are computed via quintile rank to keep them robust to
+    outliers; for thin data (< 5 customers per bucket) the rank still
+    works because Python sort is stable.
+    """
+    from datetime import date as _date
+    f = parse_filters(request)
+    end = _date.fromisoformat(f['end_date'])
+
+    qs = apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f)
+    customers = list(
+        qs.values('customer_id', 'customer_name', 'customer_type')
+        .annotate(
+            last_sale=__import__('django').db.models.Max('sale_date'),
+            orders=Count('source_id', distinct=True),
+            revenue=Sum('line_total'),
+        )
+    )
+    if not customers:
+        return Response({
+            'segments': {},
+            'customers': [],
+            'totals': {'count': 0},
+        })
+
+    for c in customers:
+        ls = c['last_sale']
+        c['recency_days'] = (end - ls).days if ls else 9999
+        c['revenue'] = float(c['revenue'] or 0)
+        c['orders'] = int(c['orders'] or 0)
+
+    def quintile_rank(values, reverse=False):
+        """Return a dict id→1..5 score. reverse=True means smaller is
+        better (used for recency)."""
+        ordered = sorted(values, key=lambda v: v[1], reverse=not reverse)
+        n = len(ordered)
+        if n == 0:
+            return {}
+        rank_map = {}
+        for i, (cid, _) in enumerate(ordered):
+            # Quintile: 1..5, with 5 going to the best 20%.
+            score = max(1, 5 - (i * 5 // max(n, 1)))
+            rank_map[cid] = score
+        return rank_map
+
+    r_map = quintile_rank([(c['customer_id'], c['recency_days']) for c in customers], reverse=True)
+    f_map = quintile_rank([(c['customer_id'], c['orders']) for c in customers])
+    m_map = quintile_rank([(c['customer_id'], c['revenue']) for c in customers])
+
+    segments_count: dict = {}
+    enriched = []
+    for c in customers:
+        r = r_map.get(c['customer_id'], 1)
+        fr = f_map.get(c['customer_id'], 1)
+        mn = m_map.get(c['customer_id'], 1)
+        score_sum = fr + mn
+        if r == 5 and score_sum >= 8:
+            seg = 'Champions'
+        elif fr == 5:
+            seg = 'Loyal'
+        elif r == 5 and fr <= 2:
+            seg = 'Potential'
+        elif r <= 2 and score_sum >= 6:
+            seg = 'At-Risk'
+        elif r == 1 and score_sum <= 4:
+            seg = 'Lost'
+        else:
+            seg = 'Hibernating'
+        segments_count[seg] = segments_count.get(seg, 0) + 1
+        enriched.append({
+            **c,
+            'last_sale': c['last_sale'].isoformat() if c['last_sale'] else None,
+            'r': r,
+            'f': fr,
+            'm': mn,
+            'rfm_code': f'{r}{fr}{mn}',
+            'segment': seg,
+        })
+
+    enriched.sort(key=lambda x: x['revenue'], reverse=True)
+
+    # Headline totals so the frontend tile can render counts per segment.
+    seg_order = ['Champions', 'Loyal', 'Potential', 'At-Risk', 'Lost', 'Hibernating']
+    return Response({
+        'totals': {
+            'count': len(enriched),
+            'period': {'start': f['start_date'], 'end': f['end_date']},
+        },
+        'segments': [
+            {'segment': s, 'count': segments_count.get(s, 0)}
+            for s in seg_order
+        ],
+        'customers': enriched[:int(request.query_params.get('limit') or 200)],
+    })
+
+
+@api_view(['GET'])
+@permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
     qs = apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f)

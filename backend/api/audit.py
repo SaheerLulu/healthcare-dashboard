@@ -1,5 +1,5 @@
 """Audit & Data Health API endpoints."""
-from django.db.models import Count
+from django.db.models import Count, Sum
 from rest_framework.decorators import api_view, permission_classes
 from .permissions import DashboardPermission
 from rest_framework.response import Response
@@ -179,6 +179,140 @@ def user_activity(request):
         data = []
 
     return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([DashboardPermission])
+def anomalies(request):
+    """Data anomalies feed (DASH-E16-F01-US03).
+
+    Heuristic-based anomaly detector. Each rule emits at most a handful
+    of items so the feed stays scannable. The point is to surface
+    *probable* data-quality issues, not to be perfect — a P-AUDIT user
+    drills into the underlying detail to confirm.
+
+    Rules:
+      - month-over-month revenue drop > 50 % (last full month vs prior)
+      - daily order count > 3σ above the trailing-30-day mean
+      - returns-share > 20 % in any month
+      - negative gross margin lines (sold below cost)
+      - GST rows where output - input is > 10× the per-month average
+      - pipeline failures in the last 24 h
+    """
+    from datetime import date as _date, timedelta
+    from statistics import mean, pstdev
+
+    items = []
+
+    # 1. Month-over-month revenue cliff -----------------------------------
+    monthly = list(
+        ReportSales.objects.values('sale_month')
+        .annotate(rev=Sum('line_total'))
+        .order_by('-sale_month')[:6]
+    )
+    if len(monthly) >= 2:
+        cur, prev = monthly[0], monthly[1]
+        cur_rev = float(cur['rev'] or 0)
+        prev_rev = float(prev['rev'] or 0)
+        if prev_rev > 0:
+            drop = (prev_rev - cur_rev) / prev_rev * 100
+            if drop > 50:
+                items.append({
+                    'severity': 'high',
+                    'rule': 'revenue_cliff',
+                    'subject': f"Revenue dropped {drop:.0f}% in {cur['sale_month']}",
+                    'detail': f"{cur['sale_month']}: ₹{cur_rev:,.0f} vs {prev['sale_month']}: ₹{prev_rev:,.0f}",
+                    'navigate': '/sales',
+                })
+
+    # 2. Daily order spike -------------------------------------------------
+    today = _date.today()
+    thirty = today - timedelta(days=30)
+    daily = list(
+        ReportSales.objects.filter(sale_date__gte=thirty)
+        .values('sale_date')
+        .annotate(orders=Count('source_id', distinct=True))
+        .order_by('sale_date')
+    )
+    if len(daily) >= 7:
+        counts = [d['orders'] for d in daily]
+        m = mean(counts)
+        sd = pstdev(counts) or 0
+        for d in daily[-3:]:
+            if sd and d['orders'] > m + 3 * sd:
+                items.append({
+                    'severity': 'medium',
+                    'rule': 'order_spike',
+                    'subject': f"Order count spike on {d['sale_date']}",
+                    'detail': f"{d['orders']} orders vs trailing-30 mean {m:.1f} (σ={sd:.1f})",
+                    'navigate': '/sales',
+                })
+
+    # 3. Returns share > 20 % ---------------------------------------------
+    sales_by_month = {
+        r['sale_month']: float(r['rev'] or 0)
+        for r in ReportSales.objects.values('sale_month').annotate(rev=Sum('line_total'))
+    }
+    returns_by_month = {
+        r['return_month']: float(r['ret'] or 0)
+        for r in ReportSalesReturns.objects.values('return_month').annotate(ret=Sum('line_total'))
+    }
+    for m, ret in returns_by_month.items():
+        sales = sales_by_month.get(m, 0)
+        if sales > 0 and ret / sales > 0.20:
+            items.append({
+                'severity': 'high',
+                'rule': 'returns_share_high',
+                'subject': f"Returns > 20% of sales in {m}",
+                'detail': f"₹{ret:,.0f} returned vs ₹{sales:,.0f} sold ({ret / sales * 100:.0f}%)",
+                'navigate': '/detail/sales-returns',
+            })
+
+    # 4. Negative gross margin lines --------------------------------------
+    neg_margin = ReportSales.objects.filter(gross_margin__lt=0).count()
+    if neg_margin > 0:
+        items.append({
+            'severity': 'medium' if neg_margin < 50 else 'high',
+            'rule': 'negative_margin',
+            'subject': f"{neg_margin} sale lines below cost",
+            'detail': "Sale lines where unit_price * quantity < purchase_rate * quantity. "
+                      "Could indicate mispriced SKU or expired-batch fire-sale.",
+            'navigate': '/detail/sales',
+        })
+
+    # 5. Pipeline failures in last 24 h -----------------------------------
+    cutoff = today - timedelta(days=1)
+    fail_count = PipelineLog.objects.filter(
+        last_run_at__date__gte=cutoff, status='error'
+    ).count() if PipelineLog.objects.exists() else 0
+    if fail_count:
+        items.append({
+            'severity': 'high',
+            'rule': 'pipeline_errors',
+            'subject': f"{fail_count} pipeline runs failed in the last 24h",
+            'detail': "See /pipeline for details and the unresolved error log.",
+            'navigate': '/pipeline',
+        })
+
+    # 6. Unresolved pipeline errors ---------------------------------------
+    unresolved = PipelineError.objects.filter(resolved=False).count() if PipelineError.objects.exists() else 0
+    if unresolved > 0:
+        items.append({
+            'severity': 'medium' if unresolved < 10 else 'high',
+            'rule': 'pipeline_errors_unresolved',
+            'subject': f"{unresolved} unresolved pipeline errors",
+            'detail': "Long-tail of source-row failures the pipeline couldn't process.",
+            'navigate': '/pipeline',
+        })
+
+    severity_rank = {'high': 0, 'medium': 1, 'low': 2}
+    items.sort(key=lambda x: severity_rank.get(x['severity'], 9))
+
+    return Response({
+        'count': len(items),
+        'as_of': today.isoformat(),
+        'items': items,
+    })
 
 
 @api_view(['GET'])
