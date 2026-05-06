@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import {
   ChevronDown, MapPin, LogOut, Settings, User, Check, Database,
-  BarChart3, ShoppingCart, Package, DollarSign, Store, FileText, Database,
+  BarChart3, ShoppingCart, Package, DollarSign, Store, FileText,
 } from 'lucide-react';
 import { NavLink, useLocation, useNavigate } from 'react-router';
 import type { LucideIcon } from 'lucide-react';

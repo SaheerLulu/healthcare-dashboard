@@ -7,7 +7,10 @@
     "build": "vite build",
     "dev": "vite",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -68,6 +71,7 @@
     "vaul": "1.1.2"
   },
   "devDependencies": {
+    "@playwright/test": "1.49.1",
     "@tailwindcss/vite": "4.1.12",
     "@testing-library/dom": "10.4.0",
     "@testing-library/jest-dom": "6.6.3",

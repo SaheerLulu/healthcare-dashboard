@@ -15,6 +15,12 @@ node_modules/
 dist/
 .vite/
 
+# Playwright artifacts
+frontend/playwright-report/
+frontend/test-results/
+frontend/blob-report/
+frontend/.playwright/
+
 # OS
 .DS_Store
 Thumbs.db
