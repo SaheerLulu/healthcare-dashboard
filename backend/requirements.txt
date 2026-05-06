@@ -4,3 +4,8 @@ djangorestframework-simplejwt>=5.5
 django-cors-headers>=4.0
 django-filter>=24.0
 gunicorn>=22.0
+
+# Production DB driver — only used when DJANGO_DB_ENGINE=postgresql.
+# psycopg[binary] keeps the wheel install simple inside the container
+# without needing system-level libpq build deps.
+psycopg[binary]>=3.2
