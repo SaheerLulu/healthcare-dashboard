@@ -143,4 +143,5 @@ urlpatterns = [
     path('pipeline/trigger/', pipeline_api.trigger_pipeline),
     path('pipeline/progress/', pipeline_api.pipeline_progress),
     path('pipeline/history/', pipeline_api.pipeline_history),
+    path('pipeline/errors/', pipeline_api.pipeline_errors),
 ]
