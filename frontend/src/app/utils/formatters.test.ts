@@ -3,6 +3,8 @@ import {
   formatIndianCurrency,
   formatIndianCurrencyAbbreviated,
   formatIndianNumber,
+  formatIndianDate,
+  formatPercentage,
 } from './formatters';
 
 /**
@@ -61,5 +63,41 @@ describe('formatIndianCurrency', () => {
 describe('formatIndianNumber', () => {
   it('groups in Indian system 12,34,567', () => {
     expect(formatIndianNumber(1234567)).toBe('12,34,567');
+  });
+
+  it('handles zero', () => {
+    expect(formatIndianNumber(0)).toBe('0');
+  });
+
+  it('formats negative numbers with sign', () => {
+    expect(formatIndianNumber(-1234567)).toMatch(/12,34,567/);
+  });
+});
+
+describe('formatIndianDate', () => {
+  it('formats DD-MMM-YYYY', () => {
+    const out = formatIndianDate('2026-04-15');
+    expect(out).toMatch(/^\d{2}-[A-Z][a-z]{2}-2026$/);
+  });
+
+  it('accepts a Date object', () => {
+    const out = formatIndianDate(new Date(2026, 3, 1)); // April 1
+    expect(out).toMatch(/^01-Apr-2026$/);
+  });
+});
+
+describe('formatPercentage', () => {
+  it('defaults to 1 decimal', () => {
+    expect(formatPercentage(19.555)).toBe('19.6%');
+  });
+
+  it('respects an explicit decimals arg', () => {
+    expect(formatPercentage(50, 0)).toBe('50%');
+    expect(formatPercentage(33.333333, 3)).toBe('33.333%');
+  });
+
+  it('handles zero and negatives', () => {
+    expect(formatPercentage(0)).toBe('0.0%');
+    expect(formatPercentage(-12.5)).toBe('-12.5%');
   });
 });
