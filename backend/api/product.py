@@ -29,6 +29,8 @@ def overview(request):
     inv_qs = ReportInventory.objects.filter(snapshot_date=latest['snapshot_date']) if latest else ReportInventory.objects.none()
     if 'location_id' in f:
         inv_qs = inv_qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        inv_qs = inv_qs.filter(location_id__in=f['location_ids'])
 
     active_skus = inv_qs.filter(qty_on_hand__gt=0).values('product_id').distinct().count()
     fast_moving = inv_qs.filter(movement_status='fast').values('product_id').distinct().count()

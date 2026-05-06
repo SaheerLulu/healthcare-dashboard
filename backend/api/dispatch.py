@@ -74,11 +74,15 @@ def _entries(filters):
             qs = DispatchEntryRO.objects.all()
             if 'location_id' in filters:
                 qs = qs.filter(location_id=filters['location_id'])
+            elif 'location_ids' in filters:
+                qs = qs.filter(location_id__in=filters['location_ids'])
             return qs
 
         b2b_qs = B2BSalesOrderRO.objects.select_related('customer').all()
         if 'location_id' in filters:
             b2b_qs = b2b_qs.filter(location_id=filters['location_id'])
+        elif 'location_ids' in filters:
+            b2b_qs = b2b_qs.filter(location_id__in=filters['location_ids'])
         return list(_synthesise_dispatch(b2b_qs))
     except (OperationalError, ProgrammingError):
         return []
