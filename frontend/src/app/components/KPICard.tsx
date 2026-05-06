@@ -25,10 +25,36 @@ export const KPICard: React.FC<KPICardProps> = ({
   onClick,
   className = '',
 }) => {
+  // a11y: when the card is clickable it becomes a button (DASH-E00-A06).
+  // Keyboard activation via Enter/Space mirrors native button semantics so
+  // screen-reader users get the same drill-through P-OWN gets with a click.
+  const isInteractive = !!onClick;
+  const trendText = trend
+    ? `, ${trend.direction === 'up' ? 'up' : 'down'} ${trend.value}`
+    : '';
+  const ariaLabel = `${title}: ${value}${trendText}${subtitle ? `. ${subtitle}` : ''}${
+    isInteractive ? '. Activate to drill into details.' : ''
+  }`;
+
   return (
     <div
       onClick={onClick}
-      className={`rounded-xl p-5 card-shadow ${onClick ? 'cursor-pointer card-hover' : ''} ${className}`}
+      onKeyDown={
+        isInteractive
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onClick?.();
+              }
+            }
+          : undefined
+      }
+      role={isInteractive ? 'button' : 'group'}
+      tabIndex={isInteractive ? 0 : undefined}
+      aria-label={ariaLabel}
+      className={`rounded-xl p-5 card-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-teal-600 ${
+        onClick ? 'cursor-pointer card-hover' : ''
+      } ${className}`}
       style={{
         backgroundColor: 'var(--surface-0)',
         border: '1px solid var(--line)',

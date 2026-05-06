@@ -11,7 +11,8 @@ interface ChartCardProps {
 const ActionButton = ({ title, children }: { title: string; children: ReactNode }) => (
   <button
     title={title}
-    className="p-1.5 rounded-md transition-colors"
+    aria-label={title}
+    className="p-1.5 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
     style={{ color: 'var(--ink-3)' }}
     onMouseEnter={(e) => {
       e.currentTarget.style.backgroundColor = 'var(--color-hover-bg)';
@@ -31,8 +32,13 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   children,
   className = '',
 }) => {
+  // a11y (DASH-E00-A06): the chart card is a labelled region so
+  // screen-reader users hear the title before the chart contents
+  // (recharts SVGs do not announce themselves otherwise).
   return (
-    <div
+    <section
+      role="region"
+      aria-label={title}
       className={`rounded-xl p-5 card-shadow ${className}`}
       style={{
         backgroundColor: 'var(--surface-0)',
@@ -44,7 +50,7 @@ export const ChartCard: React.FC<ChartCardProps> = ({
           {title}
         </h3>
 
-        <div className="flex items-center gap-0.5">
+        <div className="flex items-center gap-0.5" role="toolbar" aria-label={`${title} actions`}>
           <ActionButton title="Focus Mode"><Focus className="w-4 h-4" /></ActionButton>
           <ActionButton title="Show Data Table"><Table2 className="w-4 h-4" /></ActionButton>
           <ActionButton title="Full Screen"><Maximize2 className="w-4 h-4" /></ActionButton>
@@ -56,6 +62,6 @@ export const ChartCard: React.FC<ChartCardProps> = ({
       <div className="chart-content">
         {children}
       </div>
-    </div>
+    </section>
   );
 };
