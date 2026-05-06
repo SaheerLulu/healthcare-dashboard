@@ -1,0 +1,24 @@
+# Don't ship dev artifacts into the image.
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/.coverage
+**/.idea
+**/.vscode
+**/node_modules
+**/dist
+**/build
+**/*.log
+**/db.sqlite3
+**/.git
+**/.gitignore
+**/coverage
+**/htmlcov
+**/.venv
+.env
+.env.*
+!.env.example
+docs/RTM.csv
+docs/RTM.md
