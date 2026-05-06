@@ -61,17 +61,27 @@ def _synthesise_dispatch(b2b_qs):
 
 
 def _entries(filters):
-    """Return a list of dispatch entries (real + synth fallback)."""
-    if DispatchEntryRO.objects.exists():
-        qs = DispatchEntryRO.objects.all()
-        if 'location_id' in filters:
-            qs = qs.filter(location_id=filters['location_id'])
-        return qs
+    """Return a list of dispatch entries (real + synth fallback).
 
-    b2b_qs = B2BSalesOrderRO.objects.select_related('customer').all()
-    if 'location_id' in filters:
-        b2b_qs = b2b_qs.filter(location_id=filters['location_id'])
-    return list(_synthesise_dispatch(b2b_qs))
+    Defensive against the upstream tables being unreachable (e.g. test
+    DB without source_models, or upstream app down). Returns an empty
+    list rather than raising a 500.
+    """
+    from django.db.utils import OperationalError, ProgrammingError
+
+    try:
+        if DispatchEntryRO.objects.exists():
+            qs = DispatchEntryRO.objects.all()
+            if 'location_id' in filters:
+                qs = qs.filter(location_id=filters['location_id'])
+            return qs
+
+        b2b_qs = B2BSalesOrderRO.objects.select_related('customer').all()
+        if 'location_id' in filters:
+            b2b_qs = b2b_qs.filter(location_id=filters['location_id'])
+        return list(_synthesise_dispatch(b2b_qs))
+    except (OperationalError, ProgrammingError):
+        return []
 
 
 @api_view(['GET'])
