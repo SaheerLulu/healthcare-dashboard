@@ -93,14 +93,14 @@ Stories with zero linked test cases (red): **0**
 | DASH-E17 | DASH-E17-F01 | #885 DASH-E17-F01-US14 — `/detail/sales-returns` | New | 5 | frontend/src/app/pages/detail/AdditionalDetailPages.tsx; frontend/src/app/pages/ |  |
 | DASH-E18 | DASH-E18-F01 | #859 DASH-E18-F01-US01 — `/reports/sales` printable report | New | 5 | frontend/src/app/pages/PurchaseReport.tsx; frontend/src/app/pages/SalesReport.ts |  |
 | DASH-E18 | DASH-E18-F01 | #860 DASH-E18-F01-US02 — `/reports/purchases` printable report | New | 5 | frontend/src/app/pages/PurchaseReport.tsx; frontend/src/app/pages/SalesReport.ts |  |
-| DASH-E19 | DASH-E19-F01 | #861 DASH-E19-F01-US01 — View ETL state | New | 5 | backend/api/pipeline_api.py; frontend/src/app/pages/Settings.tsx |  |
-| DASH-E19 | DASH-E19-F01 | #862 DASH-E19-F01-US02 — Trigger incremental sync | New | 5 | backend/api/pipeline_api.py; frontend/src/app/pages/Settings.tsx |  |
-| DASH-E19 | DASH-E19-F01 | #863 DASH-E19-F01-US03 — Trigger full re-sync (with confirm) | New | 5 | backend/api/pipeline_api.py; frontend/src/app/pages/Settings.tsx |  |
-| DASH-E19 | DASH-E19-F01 | #864 DASH-E19-F01-US04 — Pipeline error log viewer | New | 5 | backend/api/pipeline_api.py; frontend/src/app/pages/Settings.tsx |  |
-| DASH-E20 | DASH-E20-F01 | #865 DASH-E20-F01-US01 — Each dashboard initial paint ≤ 3 s | In progress | 5 | — |  |
-| DASH-E20 | DASH-E20-F01 | #866 DASH-E20-F01-US02 — Cross-filter response ≤ 200 ms | In progress | 5 | — |  |
-| DASH-E20 | DASH-E20-F01 | #867 DASH-E20-F01-US03 — Server-side aggregation only | In progress | 5 | — |  |
-| DASH-E20 | DASH-E20-F02 | #868 DASH-E20-F02-US01 — HTTP cache for filter-options endpoints | In progress | 5 | — |  |
-| DASH-E20 | DASH-E20-F02 | #869 DASH-E20-F02-US02 — Per-user dashboard preferences cached | New | 5 | — |  |
+| DASH-E19 | DASH-E19-F01 | #861 DASH-E19-F01-US01 — View ETL state | In progress | 5 | backend/api/pipeline_api.py; frontend/src/app/pages/Settings.tsx |  |
+| DASH-E19 | DASH-E19-F01 | #862 DASH-E19-F01-US02 — Trigger incremental sync | In progress | 5 | backend/api/pipeline_api.py; frontend/src/app/pages/Settings.tsx |  |
+| DASH-E19 | DASH-E19-F01 | #863 DASH-E19-F01-US03 — Trigger full re-sync (with confirm) | In progress | 5 | backend/api/pipeline_api.py; frontend/src/app/pages/Settings.tsx |  |
+| DASH-E19 | DASH-E19-F01 | #864 DASH-E19-F01-US04 — Pipeline error log viewer | In progress | 5 | backend/api/pipeline_api.py; frontend/src/app/pages/Settings.tsx |  |
+| DASH-E20 | DASH-E20-F01 | #865 DASH-E20-F01-US01 — Each dashboard initial paint ≤ 3 s | In progress | 5 | backend/api/middleware.py |  |
+| DASH-E20 | DASH-E20-F01 | #866 DASH-E20-F01-US02 — Cross-filter response ≤ 200 ms | In progress | 5 | backend/api/middleware.py |  |
+| DASH-E20 | DASH-E20-F01 | #867 DASH-E20-F01-US03 — Server-side aggregation only | In progress | 5 | backend/api/middleware.py |  |
+| DASH-E20 | DASH-E20-F02 | #868 DASH-E20-F02-US01 — HTTP cache for filter-options endpoints | In progress | 5 | backend/api/middleware.py |  |
+| DASH-E20 | DASH-E20-F02 | #869 DASH-E20-F02-US02 — Per-user dashboard preferences cached | New | 5 | backend/api/middleware.py |  |
 | DASH-E20 | DASH-E20-F03 | #870 DASH-E20-F03-US01 — Container deployment alongside inventory + accounting | New | 5 | backend/start.sh |  |
 | DASH-E20 | DASH-E20-F03 | #871 DASH-E20-F03-US02 — Production PostgreSQL with materialised views (optional) | New | 5 | backend/start.sh |  |
