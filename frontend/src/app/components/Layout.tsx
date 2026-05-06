@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet } from 'react-router';
 import { FilterSidebar } from './FilterSidebar';
 import { TopBar } from './TopBar';
 import { SelectionToolbar } from './SelectionToolbar';
 import { useCrossFilter } from '../contexts/CrossFilterContext';
 import { useApiData } from '../hooks/useApiData';
+import { useDashboardPrefs } from '../hooks/useDashboardPrefs';
 
 const formatAgo = (iso: string): string => {
   if (!iso) return '—';
@@ -20,7 +21,32 @@ const formatAgo = (iso: string): string => {
 
 export const Layout = () => {
   const { activeFilters } = useCrossFilter();
+  const { prefs, updatePrefs, loaded: prefsLoaded } = useDashboardPrefs();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // Hydrate sidebar_open from server-side prefs once they arrive.
+  // We can't initialise useState from prefs because the hook fetches
+  // asynchronously; instead, sync on first load only so the user's
+  // mid-session toggle isn't clobbered by a re-fetch.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    if (prefsLoaded && !hydrated) {
+      if (typeof prefs.sidebar_open === 'boolean') {
+        setSidebarOpen(prefs.sidebar_open);
+      }
+      setHydrated(true);
+    }
+  }, [prefsLoaded, hydrated, prefs.sidebar_open]);
+
+  const toggleSidebar = () => {
+    setSidebarOpen((prev) => {
+      const next = !prev;
+      // Fire-and-forget; UI updates synchronously via setState.
+      updatePrefs({ sidebar_open: next }).catch(() => {});
+      return next;
+    });
+  };
+
   // Pull the most recent pipeline run for an honest "Last Sync" footer.
   const { data: history } = useApiData<any[]>('/pipeline/history/', [], { noFilters: true });
   const latest = Array.isArray(history) && history.length
@@ -42,7 +68,7 @@ export const Layout = () => {
       <TopBar />
 
       <div className="flex flex-1">
-        <FilterSidebar isOpen={sidebarOpen} onToggle={() => setSidebarOpen(prev => !prev)} />
+        <FilterSidebar isOpen={sidebarOpen} onToggle={toggleSidebar} />
 
         <main
           id="main-content"

@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
+import { useDashboardPrefs } from '../hooks/useDashboardPrefs';
 
 export interface GlobalFilters {
   dateRange: { start: string; end: string };
@@ -99,6 +100,29 @@ const FilterContext = createContext<FilterContextType | undefined>(undefined);
 
 export const FilterProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [filters, setFilters] = useState<GlobalFilters>(defaultFilters);
+  const { prefs, updatePrefs, loaded: prefsLoaded } = useDashboardPrefs();
+
+  // Hydrate the quickPreset from server-side prefs exactly once. After
+  // the first hydration the user is in control; we only push back to
+  // the server, never pull again. The ref guards against a late
+  // /api/prefs/ response arriving after the user already changed
+  // presets in this session.
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (!prefsLoaded || hydratedRef.current) return;
+    hydratedRef.current = true;
+    const saved = prefs.default_quick_preset;
+    if (typeof saved === 'string' && saved && saved !== filters.quickPreset) {
+      setFilters(prev => ({
+        ...prev,
+        quickPreset: saved,
+        dateRange: computeDateRange(saved),
+      }));
+    }
+    // filters.quickPreset is intentionally not in deps — we only run on
+    // the first prefs load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefsLoaded]);
 
   const updateFilters = (newFilters: Partial<GlobalFilters>) => {
     setFilters(prev => {
@@ -111,6 +135,14 @@ export const FilterProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       }
       return merged;
     });
+    // Persist preset choice — only when it changed and isn't 'Custom'.
+    if (
+      newFilters.quickPreset &&
+      newFilters.quickPreset !== 'Custom' &&
+      hydratedRef.current
+    ) {
+      updatePrefs({ default_quick_preset: newFilters.quickPreset }).catch(() => {});
+    }
   };
 
   const resetFilters = () => {
