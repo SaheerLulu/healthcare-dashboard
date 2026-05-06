@@ -1,0 +1,73 @@
+# Production compose stack — DASH-E20-F03-US02.
+#
+# Adds a PostgreSQL service in front of the dashboard. SQLite stays
+# the dev/staging default (docker-compose.yml); this file is layered
+# on top with `-f docker-compose.yml -f docker-compose.prod.yml` to
+# override the database backend.
+#
+# Pre-flight
+#   1. Set POSTGRES_PASSWORD in .env.
+#   2. The dashboard's reporting tables are populated by ETL, so a
+#      fresh Postgres can be hydrated by running the pipeline service
+#      (already declared in docker-compose.yml).
+#   3. The upstream healthcare/healthcare-accounting apps still
+#      provide the source of truth via UPSTREAM_DB_PATH (SQLite).
+#      Postgres holds only the dashboard's reporting tables and the
+#      audit/prefs metadata — no source data is duplicated.
+#
+# Usage
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     run --rm backend python3 manage.py migrate
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     run --rm backend python3 manage.py run_all_pipelines --full
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-healthcare_dashboard}
+      POSTGRES_USER: ${POSTGRES_USER:-dashboard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dashboard} -d ${POSTGRES_DB:-healthcare_dashboard}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    environment:
+      DJANGO_DB_ENGINE: postgresql
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-healthcare_dashboard}
+      POSTGRES_USER: ${POSTGRES_USER:-dashboard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      # Keep the read-only upstream SQLite mount for source_models.
+      DJANGO_DB_PATH: /data/db.sqlite3
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  pipeline:
+    environment:
+      DJANGO_DB_ENGINE: postgresql
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-healthcare_dashboard}
+      POSTGRES_USER: ${POSTGRES_USER:-dashboard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      DJANGO_DB_PATH: /data/db.sqlite3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

@@ -81,15 +81,32 @@ TEMPLATES = [
 WSGI_APPLICATION = 'dashboard_project.wsgi.application'
 
 # ---------------------------------------------------------------------------
-# Database – shared SQLite with healthcare-inventory-management & accounting
+# Database
+#   - Default: shared SQLite with healthcare-inventory-management & accounting.
+#   - Production: PostgreSQL when DJANGO_DB_ENGINE=postgresql (DASH-E20-F03-US02).
 # ---------------------------------------------------------------------------
 _DEFAULT_SHARED_DB = (BASE_DIR.parent.parent / 'healthcare' / 'backend' / 'db.sqlite3').resolve()
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': os.environ.get('DJANGO_DB_PATH', str(_DEFAULT_SHARED_DB)),
+_DB_ENGINE = os.environ.get('DJANGO_DB_ENGINE', 'sqlite3').lower()
+
+if _DB_ENGINE in ('postgres', 'postgresql', 'pg'):
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('POSTGRES_DB', 'healthcare_dashboard'),
+            'USER': os.environ.get('POSTGRES_USER', 'dashboard'),
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
+            'HOST': os.environ.get('POSTGRES_HOST', 'postgres'),
+            'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+            'CONN_MAX_AGE': int(os.environ.get('DJANGO_CONN_MAX_AGE', '60')),
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': os.environ.get('DJANGO_DB_PATH', str(_DEFAULT_SHARED_DB)),
+        }
+    }
 
 # ---------------------------------------------------------------------------
 # Password validation
