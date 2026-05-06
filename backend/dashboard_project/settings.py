@@ -58,6 +58,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'api.middleware.PerfTimingMiddleware',
     'api.middleware.CacheControlMiddleware',
+    'api.middleware.AuditMiddleware',
 ]
 
 ROOT_URLCONF = 'dashboard_project.urls'

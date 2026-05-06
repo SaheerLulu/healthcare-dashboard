@@ -482,3 +482,33 @@ class DashboardPref(models.Model):
 
     def __str__(self):
         return f"DashboardPref(user_id={self.user_id})"
+
+
+class AuditLog(models.Model):
+    """Mutation audit trail (DASH-E00-A04).
+
+    A row is written for every non-GET request reaching /api/* by
+    AuditMiddleware. Auditors (P-AUDIT) read this through
+    /detail/audit. Retention is 8 years per DASH-E00-A07
+    (Income-Tax Act records retention).
+    """
+
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+    user_id = models.IntegerField(null=True, blank=True, db_index=True)
+    user_label = models.CharField(max_length=120, blank=True)
+    method = models.CharField(max_length=10)
+    path = models.CharField(max_length=255, db_index=True)
+    status_code = models.IntegerField(null=True, blank=True)
+    duration_ms = models.IntegerField(default=0)
+    ip = models.CharField(max_length=64, blank=True)
+    body_summary = models.TextField(blank=True)
+
+    class Meta:
+        db_table = 'audit_log'
+        indexes = [
+            models.Index(fields=['timestamp', 'path']),
+            models.Index(fields=['user_id', 'timestamp']),
+        ]
+
+    def __str__(self):
+        return f"{self.method} {self.path} by {self.user_label or 'anon'} @ {self.timestamp:%Y-%m-%d %H:%M}"
