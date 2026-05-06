@@ -13,8 +13,12 @@ a green/amber/red tile without doing math client-side.
 
 Auditors (P-AUDIT) load these for a period and click into the variance
 to find the offending row.
+
+Internal computation lives in ``_compute_*`` helpers; the
+``@api_view``-decorated wrappers handle HTTP plumbing only. That split
+lets ``reconcile_summary`` aggregate the three results without
+double-going-through-DRF (which would re-wrap the request and break).
 """
-from datetime import date, timedelta
 from decimal import Decimal
 
 from django.db.models import Sum
@@ -34,24 +38,12 @@ def _verdict(variance_abs: Decimal, threshold_abs: Decimal) -> str:
     return 'fail'
 
 
-@api_view(['GET'])
-@permission_classes([DashboardPermission])
-def reconcile_sales(request):
-    """Compare ReportSales total revenue vs upstream POS + B2B order lines.
-
-    Threshold: 0.01 % of dashboard revenue or ₹1, whichever is greater.
-    """
-    f = parse_filters(request)
-    start = f['start_date']
-    end = f['end_date']
-
+def _compute_sales(filters):
+    start, end = filters['start_date'], filters['end_date']
     dash_rev = ReportSales.objects.filter(
         sale_date__gte=start, sale_date__lte=end
     ).aggregate(total=Sum('line_total'))['total'] or Decimal('0')
 
-    # Upstream sum: POS + B2B order line totals over the same window. We
-    # import lazily so the source_models migration state can't break the
-    # reports app load.
     try:
         from source_models.models import POSOrderLineRO, B2BSalesOrderLineRO
 
@@ -64,7 +56,7 @@ def reconcile_sales(request):
         ).aggregate(total=Sum('line_total'))['total'] or Decimal('0')
         source_rev = pos_total + b2b_total
         source_available = True
-    except Exception as exc:
+    except Exception:
         source_rev = Decimal('0')
         source_available = False
 
@@ -72,7 +64,7 @@ def reconcile_sales(request):
     variance_abs = abs(variance)
     threshold = max(Decimal('1'), abs(Decimal(dash_rev)) * Decimal('0.0001'))
 
-    return Response({
+    return {
         'metric': 'sales_revenue',
         'period': {'start': start, 'end': end},
         'dashboard_value': float(dash_rev),
@@ -83,20 +75,11 @@ def reconcile_sales(request):
         'threshold': float(threshold),
         'verdict': _verdict(variance_abs, threshold) if source_available else 'unknown',
         'unit': 'INR',
-    })
+    }
 
 
-@api_view(['GET'])
-@permission_classes([DashboardPermission])
-def reconcile_gst(request):
-    """Compare ReportGST net liability vs the GSTR-3B preview rows.
-
-    Threshold: ₹1. (DASH-E00-A07)
-    """
-    f = parse_filters(request)
-    start = f['start_date']
-    end = f['end_date']
-
+def _compute_gst(filters):
+    start, end = filters['start_date'], filters['end_date']
     gst_qs = ReportGST.objects.filter(
         period__gte=start[:7], period__lte=end[:7], source_table='gstr3b'
     )
@@ -106,24 +89,16 @@ def reconcile_gst(request):
         )['total'] or Decimal('0')
     )
 
-    # Source comparison would query upstream gst_3b_preview — schema is
-    # unstable across accounting versions, so we expose a 'source not
-    # configured' state rather than ship a guess.
+    # Upstream gst_3b_preview schema is unstable across accounting
+    # versions; mark source unavailable rather than fabricate a number.
     source_total = Decimal('0')
     source_available = False
-    try:
-        # Optional — only compare if the row count is non-trivial.
-        if gst_qs.count() > 0:
-            source_total = dash_total  # placeholder until accounting publishes the preview API
-            source_available = False
-    except Exception:
-        source_available = False
 
     variance = Decimal(dash_total) - Decimal(source_total)
     variance_abs = abs(variance)
     threshold = Decimal('1')
 
-    return Response({
+    return {
         'metric': 'gst_net_liability',
         'period': {'start': start, 'end': end},
         'dashboard_value': float(dash_total),
@@ -134,20 +109,11 @@ def reconcile_gst(request):
         'threshold': float(threshold),
         'verdict': _verdict(variance_abs, threshold) if source_available else 'unknown',
         'unit': 'INR',
-    })
+    }
 
 
-@api_view(['GET'])
-@permission_classes([DashboardPermission])
-def reconcile_cash(request):
-    """Compare ReportFinancial cash+bank balance vs upstream bank book.
-
-    Threshold: ₹0 (must match exactly per DASH-E00-A07).
-    """
-    f = parse_filters(request)
-    start = f['start_date']
-    end = f['end_date']
-
+def _compute_cash(filters):
+    start, end = filters['start_date'], filters['end_date']
     fin_qs = ReportFinancial.objects.filter(
         is_posted=True,
         entry_date__gte=start, entry_date__lte=end,
@@ -155,9 +121,7 @@ def reconcile_cash(request):
     )
     dash_balance = fin_qs.aggregate(total=Sum('debit') - Sum('credit'))['total'] or Decimal('0')
 
-    # Source comparison: upstream bank book endpoint isn't yet wired into
-    # source_models, so we mark unknown until the accounting team
-    # publishes a stable view. A future PR will replace the placeholder.
+    # Upstream bank book endpoint isn't yet wired into source_models.
     source_balance = Decimal('0')
     source_available = False
 
@@ -165,7 +129,7 @@ def reconcile_cash(request):
     variance_abs = abs(variance)
     threshold = Decimal('0')
 
-    return Response({
+    return {
         'metric': 'cash_position',
         'period': {'start': start, 'end': end},
         'dashboard_value': float(dash_balance),
@@ -176,7 +140,25 @@ def reconcile_cash(request):
         'threshold': float(threshold),
         'verdict': _verdict(variance_abs, threshold) if source_available else 'unknown',
         'unit': 'INR',
-    })
+    }
+
+
+@api_view(['GET'])
+@permission_classes([DashboardPermission])
+def reconcile_sales(request):
+    return Response(_compute_sales(parse_filters(request)))
+
+
+@api_view(['GET'])
+@permission_classes([DashboardPermission])
+def reconcile_gst(request):
+    return Response(_compute_gst(parse_filters(request)))
+
+
+@api_view(['GET'])
+@permission_classes([DashboardPermission])
+def reconcile_cash(request):
+    return Response(_compute_cash(parse_filters(request)))
 
 
 @api_view(['GET'])
@@ -187,11 +169,8 @@ def reconcile_summary(request):
     Used by the audit dashboard tile so a P-CFO sees a single
     pass/amber/fail/unknown verdict per metric without three round-trips.
     """
-    sales = reconcile_sales(request).data
-    gst = reconcile_gst(request).data
-    cash = reconcile_cash(request).data
-
-    items = [sales, gst, cash]
+    f = parse_filters(request)
+    items = [_compute_sales(f), _compute_gst(f), _compute_cash(f)]
     overall = 'pass'
     for it in items:
         if it['verdict'] == 'fail':
