@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { Outlet } from 'react-router';
 import { FilterSidebar } from './FilterSidebar';
 import { TopBar } from './TopBar';
@@ -78,7 +78,20 @@ export const Layout = () => {
           {activeFilters.length > 0 && <SelectionToolbar />}
 
           <div className="p-6">
-            <Outlet />
+            {/* Suspense fallback for code-split routes (DASH-E20-F01-US01). */}
+            <Suspense
+              fallback={
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="flex items-center justify-center min-h-[60vh] text-gray-400 text-sm"
+                >
+                  Loading…
+                </div>
+              }
+            >
+              <Outlet />
+            </Suspense>
           </div>
 
           <footer
