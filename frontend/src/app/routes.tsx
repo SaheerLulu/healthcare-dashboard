@@ -9,6 +9,7 @@ import { GSTCompliance } from "./pages/GSTCompliance";
 import { Settings } from "./pages/Settings";
 import { SalesReport } from "./pages/SalesReport";
 import { PurchaseReport } from "./pages/PurchaseReport";
+import { PipelineManagement } from "./pages/PipelineManagement";
 import {
   TDSTracker,
   WorkingCapital,
@@ -58,6 +59,7 @@ export const router = createBrowserRouter([
       { path: "loyalty", Component: LoyaltyAnalytics },
       { path: "audit", Component: AuditDataHealth },
       { path: "settings", Component: Settings },
+      { path: "pipeline", Component: PipelineManagement },
       { path: "reports/sales", Component: SalesReport },
       { path: "reports/purchases", Component: PurchaseReport },
       

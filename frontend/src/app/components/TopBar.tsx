@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 import {
-  ChevronDown, MapPin, LogOut, Settings, User, Check,
+  ChevronDown, MapPin, LogOut, Settings, User, Check, Database,
   BarChart3, ShoppingCart, Package, DollarSign, Store, FileText, Database,
 } from 'lucide-react';
 import { NavLink, useLocation, useNavigate } from 'react-router';
@@ -406,6 +406,16 @@ export const TopBar = () => {
                 >
                   <Settings className="w-4 h-4" style={{ color: 'var(--ink-3)' }} />
                   Settings
+                </button>
+                <button
+                  onClick={() => { navigate('/pipeline'); setOpenDropdown(null); }}
+                  className="w-full px-4 py-2.5 text-left text-sm transition-all flex items-center gap-3"
+                  style={{ color: 'var(--ink)' }}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--color-hover-bg)'}
+                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = ''}
+                >
+                  <Database className="w-4 h-4" style={{ color: 'var(--ink-3)' }} />
+                  Pipeline
                 </button>
               </div>
               <div style={{ borderTop: '1px solid var(--line)' }} className="py-2">

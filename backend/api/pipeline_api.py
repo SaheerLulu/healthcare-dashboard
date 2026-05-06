@@ -5,7 +5,7 @@ from .permissions import DashboardPermission
 from rest_framework.response import Response
 from pipeline.inventory_pipeline import InventoryPipeline
 from pipeline.financial_pipeline import FinancialPipeline
-from pipeline.models import PipelineLog
+from pipeline.models import PipelineLog, PipelineError
 
 # Simple in-memory flag for pipeline running state
 _pipeline_lock = threading.Lock()
@@ -94,3 +94,32 @@ def pipeline_history(request):
                 'records_processed', 'status', 'duration_seconds', 'error_message')[:30]
     )
     return Response(logs)
+
+
+@api_view(['GET'])
+@permission_classes([DashboardPermission])
+def pipeline_errors(request):
+    """Return recent unresolved pipeline errors (DASH-E19-F01-US04).
+
+    Filters to ``resolved=False`` by default; pass ``?include_resolved=1``
+    to see the full history. Capped at 100 to keep payloads small.
+    """
+    qs = PipelineError.objects.order_by('-created_at')
+    if request.query_params.get('include_resolved', '').lower() not in ('1', 'true', 'yes'):
+        qs = qs.filter(resolved=False)
+
+    rows = list(
+        qs.values(
+            'id',
+            'pipeline_type',
+            'source_id',
+            'error_message',
+            'retry_count',
+            'resolved',
+            'created_at',
+        )[:100]
+    )
+    return Response({
+        'count': len(rows),
+        'errors': rows,
+    })
