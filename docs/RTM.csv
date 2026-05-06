@@ -94,5 +94,5 @@ DASH-E20,DASH-E20-F01,[FEAT] DASH-E20-F01 — Performance budget,866,DASH-E20-F0
 DASH-E20,DASH-E20-F01,[FEAT] DASH-E20-F01 — Performance budget,867,DASH-E20-F01-US03 — Server-side aggregation only,In progress,5,"1182,1184,1186,1188,1189",backend/api/middleware.py,
 DASH-E20,DASH-E20-F02,[FEAT] DASH-E20-F02 — Caching,868,DASH-E20-F02-US01 — HTTP cache for filter-options endpoints,In progress,5,"1191,1193,1195,1197,1199",backend/api/middleware.py,
 DASH-E20,DASH-E20-F02,[FEAT] DASH-E20-F02 — Caching,869,DASH-E20-F02-US02 — Per-user dashboard preferences cached,New,5,"1191,1193,1195,1197,1199",backend/api/middleware.py,
-DASH-E20,DASH-E20-F03,[FEAT] DASH-E20-F03 — Deployment,870,DASH-E20-F03-US01 — Container deployment alongside inventory + accounting,New,5,"1201,1203,1205,1207,1210",backend/start.sh,
-DASH-E20,DASH-E20-F03,[FEAT] DASH-E20-F03 — Deployment,871,DASH-E20-F03-US02 — Production PostgreSQL with materialised views (optional),New,5,"1201,1203,1205,1207,1210",backend/start.sh,
+DASH-E20,DASH-E20-F03,[FEAT] DASH-E20-F03 — Deployment,870,DASH-E20-F03-US01 — Container deployment alongside inventory + accounting,In progress,5,"1201,1203,1205,1207,1210",backend/start.sh,
+DASH-E20,DASH-E20-F03,[FEAT] DASH-E20-F03 — Deployment,871,DASH-E20-F03-US02 — Production PostgreSQL with materialised views (optional),In progress,5,"1201,1203,1205,1207,1210",backend/start.sh,
