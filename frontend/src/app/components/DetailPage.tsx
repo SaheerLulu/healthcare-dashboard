@@ -3,7 +3,11 @@ import { useNavigate } from 'react-router';
 import { ArrowLeft, X, Download, Columns3, Check } from 'lucide-react';
 import { useDetailQuery } from '../hooks/useDetailQuery';
 import { useFilters } from '../contexts/FilterContext';
-import { CsvColumn } from '../utils/csv';
+import { CsvColumn, downloadCsv } from '../utils/csv';
+
+/** Rendering this many DOM rows stays responsive; beyond it we ask the
+ *  user to refine the filter rather than freeze the tab. */
+const FILTER_RENDER_CAP = 5000;
 
 export interface DetailColumn extends CsvColumn {
   /** Right-align + total row when set. */
@@ -68,6 +72,44 @@ export const DetailPage: React.FC<DetailPageProps> = ({
     [columns, hiddenKeys],
   );
 
+  // Per-column text filters. While any filter is active the table works on
+  // the FULL result set (fetched once per query, all pages) and shows every
+  // match without pagination.
+  const [colFilters, setColFilters] = useState<Record<string, string>>({});
+  const activeFilters = Object.entries(colFilters).filter(([, v]) => v.trim() !== '');
+  const filtering = activeFilters.length > 0;
+
+  const [allRows, setAllRows] = useState<any[] | null>(null);
+  const allRowsKeyRef = useRef('');
+  const [allLoading, setAllLoading] = useState(false);
+  useEffect(() => {
+    if (!filtering) return;
+    if (allRowsKeyRef.current === q.queryKey && allRows) return;
+    let cancelled = false;
+    setAllLoading(true);
+    q.fetchAll()
+      .then(rows => {
+        if (cancelled) return;
+        allRowsKeyRef.current = q.queryKey;
+        setAllRows(rows);
+      })
+      .catch(() => { /* surfaced via the page-level error from the main query */ })
+      .finally(() => { if (!cancelled) setAllLoading(false); });
+    return () => { cancelled = true; };
+  }, [filtering, q.queryKey]);
+
+  const matchRow = (row: any) =>
+    activeFilters.every(([key, needle]) => {
+      const col = columns.find(c => c.key === key);
+      const raw = row?.[key];
+      const formatted = col?.format ? String(col.format(raw, row) ?? '') : '';
+      return `${raw ?? ''} ${formatted}`.toLowerCase().includes(needle.trim().toLowerCase());
+    });
+
+  const filteredRows = filtering ? (allRows || []).filter(matchRow) : null;
+  const displayRows = filteredRows ? filteredRows.slice(0, FILTER_RENDER_CAP) : q.rows;
+  const busy = q.loading || (filtering && allLoading);
+
   // Columns dropdown open/close (outside click + Escape).
   const [colMenuOpen, setColMenuOpen] = useState(false);
   const colMenuRef = useRef<HTMLDivElement>(null);
@@ -105,7 +147,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({
   const totals: Record<string, number> = {};
   for (const col of visibleColumns) {
     if (col.total) {
-      totals[col.key] = q.rows.reduce((sum, r) => sum + (Number(r?.[col.key]) || 0), 0);
+      totals[col.key] = (filteredRows ?? q.rows).reduce((sum, r) => sum + (Number(r?.[col.key]) || 0), 0);
     }
   }
   const hasTotals = Object.keys(totals).length > 0;
@@ -175,7 +217,11 @@ export const DetailPage: React.FC<DetailPageProps> = ({
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold text-gray-900 truncate">{title}</h1>
           <p className="text-sm text-gray-600 mt-1">
-            {q.loading ? 'Loading…' : `${q.count.toLocaleString('en-IN')} records`}
+            {busy
+              ? 'Loading…'
+              : filtering
+                ? `${(filteredRows || []).length.toLocaleString('en-IN')} of ${(allRows || []).length.toLocaleString('en-IN')} records match the column filters`
+                : `${q.count.toLocaleString('en-IN')} records`}
             {subtitle ? ` | ${subtitle}` : ''}
             {!q.drill && ` | ${globalSummary}`}
           </p>
@@ -229,12 +275,20 @@ export const DetailPage: React.FC<DetailPageProps> = ({
             )}
           </div>
           <button
-            onClick={() => q.exportCsv(title.toLowerCase().replace(/\s+/g, '-'), visibleColumns)}
-            title={q.exportCapped ? 'Exports the first 500 rows of the current query' : 'Export the current query as CSV'}
+            onClick={async () => {
+              const name = title.toLowerCase().replace(/\s+/g, '-');
+              if (filtering) {
+                const rows = allRows ?? (await q.fetchAll());
+                downloadCsv(name, visibleColumns, rows.filter(matchRow));
+              } else {
+                await q.exportCsv(name, visibleColumns);
+              }
+            }}
+            title="Export every row of the current query (column filters applied)"
             className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap"
           >
             <Download className="w-4 h-4 inline mr-2" />
-            Export CSV{q.exportCapped ? ' (first 500)' : ''}
+            Export CSV
           </button>
         </div>
       </div>
@@ -264,16 +318,31 @@ export const DetailPage: React.FC<DetailPageProps> = ({
                   </th>
                 ))}
               </tr>
+              {/* Per-column filter row */}
+              <tr className="bg-white border-b border-gray-200">
+                {visibleColumns.map(col => (
+                  <th key={col.key} className="px-2 py-1.5 font-normal">
+                    <input
+                      type="text"
+                      value={colFilters[col.key] || ''}
+                      onChange={e => setColFilters(prev => ({ ...prev, [col.key]: e.target.value }))}
+                      placeholder="Filter…"
+                      aria-label={`Filter ${col.label}`}
+                      className="w-full min-w-[90px] px-2 py-1 text-xs font-normal text-gray-700 border border-gray-200 rounded outline-none focus:border-teal-500"
+                    />
+                  </th>
+                ))}
+              </tr>
             </thead>
             <tbody>
-              {!q.loading && q.rows.length === 0 && (
+              {!busy && displayRows.length === 0 && (
                 <tr>
                   <td colSpan={visibleColumns.length} className="py-10 text-center text-sm text-gray-400">
                     No records match the current filters
                   </td>
                 </tr>
               )}
-              {q.rows.map((row, index) => (
+              {displayRows.map((row, index) => (
                 <tr
                   key={index}
                   className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
@@ -289,7 +358,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({
                 </tr>
               ))}
             </tbody>
-            {hasTotals && q.rows.length > 0 && (
+            {hasTotals && displayRows.length > 0 && (
               <tfoot className="bg-gray-50 border-t-2 border-gray-300">
                 <tr>
                   {visibleColumns.map((col, i) => (
@@ -298,7 +367,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({
                       className={`py-3 px-4 font-bold text-gray-900 ${col.numeric ? 'text-right' : ''}`}
                     >
                       {i === 0
-                        ? 'PAGE TOTAL'
+                        ? (filtering ? 'FILTERED TOTAL' : 'PAGE TOTAL')
                         : col.total
                           ? (col.format ? col.format(totals[col.key]) : totals[col.key].toLocaleString('en-IN'))
                           : ''}
@@ -311,7 +380,25 @@ export const DetailPage: React.FC<DetailPageProps> = ({
         </div>
       </div>
 
-      {/* Pagination */}
+      {/* Pagination — hidden while column filters are active: the filtered
+          view shows every match in one scroll. */}
+      {filtering ? (
+        <div className="flex items-center justify-between mt-4">
+          <div className="text-sm text-gray-600">
+            {allLoading
+              ? 'Loading all records for filtering…'
+              : (filteredRows || []).length > FILTER_RENDER_CAP
+                ? `Showing first ${FILTER_RENDER_CAP.toLocaleString('en-IN')} of ${(filteredRows || []).length.toLocaleString('en-IN')} matches — refine the filter to narrow down (CSV export includes all matches)`
+                : `${(filteredRows || []).length.toLocaleString('en-IN')} matching record(s), unpaginated`}
+          </div>
+          <button
+            onClick={() => setColFilters({})}
+            className="px-3 py-1.5 text-sm font-medium text-teal-700 bg-white border border-teal-300 rounded hover:bg-teal-50"
+          >
+            Clear column filters
+          </button>
+        </div>
+      ) : (
       <div className="flex items-center justify-between mt-4">
         <div className="text-sm text-gray-600">
           {q.count > 0
@@ -338,6 +425,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 };

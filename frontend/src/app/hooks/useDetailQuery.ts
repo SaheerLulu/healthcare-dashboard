@@ -6,7 +6,10 @@ import { DrillContext, DrillFilter, buildDrillSearch, parseDrillSearch, drillFil
 import { CsvColumn, downloadCsv } from '../utils/csv';
 
 const PAGE_SIZE = 50;
-const EXPORT_CAP = 500;
+/** Server page_size cap (DRILLTHROUGH_DESIGN) — fetchAll loops in chunks of this. */
+const CHUNK = 500;
+/** Hard safety stop for fetch-everything loops. */
+const FETCH_ALL_MAX = 100_000;
 
 interface DetailQueryState {
   rows: any[];
@@ -22,8 +25,10 @@ interface DetailQueryState {
   removeDrillFilter: (id: string) => void;
   clearDrillFilters: () => void;
   exportCsv: (filename: string, columns: CsvColumn[]) => Promise<void>;
-  /** True when the export will be truncated to the cap. */
-  exportCapped: boolean;
+  /** Fetch every row of the current query (all pages). */
+  fetchAll: () => Promise<any[]>;
+  /** Changes whenever filters/ordering change — cache key for fetchAll results. */
+  queryKey: string;
 }
 
 /**
@@ -32,7 +37,7 @@ interface DetailQueryState {
  *   router state, so refreshed/shared links keep their context)
  * - real server-side pagination + whitelisted ordering
  * - functional chip removal (rewrites the URL, refetches)
- * - CSV export of the CURRENT query (capped at 500 rows server-side)
+ * - CSV export of the CURRENT query — all pages, fetched in 500-row chunks
  */
 export function useDetailQuery(endpoint: string, defaultOrdering: string): DetailQueryState {
   const location = useLocation();
@@ -128,21 +133,35 @@ export function useDetailQuery(endpoint: string, defaultOrdering: string): Detai
     setOrderingState(prev => (prev === column ? `-${column}` : column));
   };
 
-  const exportCapped = count > EXPORT_CAP;
+  const fetchAll = async (): Promise<any[]> => {
+    const all: any[] = [];
+    for (let p = 1; all.length < FETCH_ALL_MAX; p++) {
+      const res = await api.get(endpoint, {
+        params: { ...baseParams, page: p, page_size: CHUNK, ordering },
+      });
+      const data = res.data;
+      if (Array.isArray(data)) {
+        all.push(...data);
+        break; // non-paginated endpoint — one shot has everything
+      }
+      const results = data?.results || [];
+      all.push(...results);
+      const total = Number(data?.count) || all.length;
+      if (!data?.next || all.length >= total || results.length === 0) break;
+    }
+    return all;
+  };
 
   const exportCsv = async (filename: string, columns: CsvColumn[]) => {
-    const res = await api.get(endpoint, {
-      params: { ...baseParams, page: 1, page_size: EXPORT_CAP, ordering },
-    });
-    const data = res.data;
-    const all = Array.isArray(data) ? data : (data?.results || []);
-    downloadCsv(filename, columns, all);
+    downloadCsv(filename, columns, await fetchAll());
   };
+
+  const queryKey = `${endpoint}|${JSON.stringify(baseParams)}|${ordering}`;
 
   return {
     rows, count, page, pageCount: Math.max(1, Math.ceil(count / PAGE_SIZE)),
     loading, error, ordering, drill,
     setPage, setOrdering, removeDrillFilter, clearDrillFilters,
-    exportCsv, exportCapped,
+    exportCsv, fetchAll, queryKey,
   };
 }

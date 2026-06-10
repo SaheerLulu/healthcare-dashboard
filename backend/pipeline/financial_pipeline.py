@@ -134,8 +134,10 @@ class FinancialPipeline:
             .order_by('id')
         )
         for col in self._journal_exclusion_columns():
+            # FALSE, not 0: these are boolean columns and Postgres rejects
+            # COALESCE(boolean, integer). SQLite reads FALSE as 0 either way.
             entries = entries.extra(
-                where=[f'COALESCE("journals_journalentry"."{col}", 0) = 0'])
+                where=[f'COALESCE("journals_journalentry"."{col}", FALSE) = FALSE'])
 
         count = 0
         errors = 0

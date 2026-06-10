@@ -138,7 +138,7 @@ export const SalesReport = () => {
               className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
             >
               <Download className="w-4 h-4 inline mr-2" />
-              Export CSV{q.exportCapped ? ' (first 500)' : ''}
+              Export CSV
             </button>
           </div>
         </div>
