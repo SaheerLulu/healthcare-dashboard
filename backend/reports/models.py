@@ -285,10 +285,12 @@ class ReportInventory(models.Model):
     reorder_needed = models.BooleanField(default=False)
     safety_stock = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
-    # Efficiency metrics
+    # Efficiency metrics. Turnover and GMROI are ratios, not percents —
+    # low stock against strong 90-day sales legitimately exceeds 999.99,
+    # which overflowed max_digits=5 on PostgreSQL (SQLite never enforced it).
     fill_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    inventory_turnover = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    gmroi = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    inventory_turnover = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    gmroi = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
