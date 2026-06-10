@@ -1,0 +1,81 @@
+# ============================================================
+# DEV environment – docker-compose
+# Domain: dev.dashboards.seefmed.com
+# Run:  docker compose -p dashboard-dev -f deploy/docker-compose.dev.yml --env-file /opt/dashboard/dev/.env up -d --build
+#
+# The dashboard reads its source data from the pharmacy DEV
+# database (PostgreSQL `healthcare_dev` on the host) and creates
+# its own reporting tables in the same database — mirroring the
+# local shared-SQLite design.
+# ============================================================
+
+x-backend-base: &backend-base
+  build:
+    context: ../backend
+    dockerfile: Dockerfile
+  environment: &backend-env
+    DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
+    DJANGO_DEBUG: "False"
+    DJANGO_DB_ENGINE: postgresql
+    POSTGRES_HOST: ${POSTGRES_HOST:-host.docker.internal}
+    POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+    POSTGRES_DB: ${POSTGRES_DB:-healthcare_dev}
+    POSTGRES_USER: ${POSTGRES_USER:-healthcare}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    DASHBOARD_REQUIRE_AUTH: ${DASHBOARD_REQUIRE_AUTH:-1}
+    DASHBOARD_PERF_LOG: "1"
+    GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  networks:
+    - dashboard-dev
+  restart: unless-stopped
+
+services:
+  # ---- Django backend (dev) ----
+  backend:
+    <<: *backend-base
+    container_name: dashboard-dev-backend
+    expose:
+      - "8002"
+
+  # ---- One-shot full pipeline on cold start ----
+  pipeline:
+    <<: *backend-base
+    container_name: dashboard-dev-pipeline
+    depends_on:
+      backend:
+        condition: service_healthy
+    command: ["python3", "manage.py", "run_all_pipelines"]
+    restart: "no"
+
+  # ---- Periodic incremental ETL sync ----
+  scheduler:
+    <<: *backend-base
+    container_name: dashboard-dev-scheduler
+    depends_on:
+      backend:
+        condition: service_healthy
+    command: >
+      sh -c "while true; do
+               python3 manage.py run_all_pipelines || echo 'pipeline run failed';
+               sleep ${PIPELINE_SYNC_INTERVAL:-300};
+             done"
+
+  # ---- React frontend (nginx serving vite build) ----
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: dashboard-dev-frontend
+    ports:
+      - "${DEV_FRONTEND_PORT:-3005}:80"
+    depends_on:
+      - backend
+    networks:
+      - dashboard-dev
+    restart: unless-stopped
+
+networks:
+  dashboard-dev:
+    driver: bridge

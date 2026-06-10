@@ -1,0 +1,116 @@
+# ============================================================
+# Deploy DEV – triggered on push to 'develop' branch
+# Deploys to: dev.dashboards.seefmed.com
+# ============================================================
+name: Deploy DEV
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy-dev:
+    name: Deploy to DEV server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Copy repo to EC2
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_SSH_PORT || 22 }}
+          source: "backend,frontend,deploy"
+          target: "/opt/dashboard/repo"
+          rm: true
+          overwrite: true
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+
+            REPO_DIR="/opt/dashboard/repo"
+            ENV_DIR="/opt/dashboard/dev"
+            COMPOSE_FILE="${REPO_DIR}/deploy/docker-compose.dev.yml"
+            ENV_FILE="${ENV_DIR}/.env"
+            PHARMA_ENV="/opt/healthcare/dev/.env"
+
+            echo "=== Dashboard DEV Deployment started at $(date -u) ==="
+
+            # Verify sudo works (required for nginx)
+            sudo -n true 2>/dev/null || { echo "ERROR: Deploy user needs passwordless sudo"; exit 1; }
+
+            # Ensure env file exists — derive shared values from the pharmacy
+            # dev env so JWT SSO (DJANGO_SECRET_KEY) and the Postgres password
+            # stay in sync with the upstream app.
+            if [ ! -f "$ENV_FILE" ]; then
+              echo "Creating env file from pharmacy dev env..."
+              if [ ! -f "$PHARMA_ENV" ]; then
+                echo "ERROR: $PHARMA_ENV not found. Deploy the pharmacy app first."
+                exit 1
+              fi
+              SECRET_KEY=$(grep -E '^DJANGO_SECRET_KEY=' "$PHARMA_ENV" | head -1 | cut -d= -f2-)
+              PG_PASSWORD=$(grep -E '^POSTGRES_PASSWORD=' "$PHARMA_ENV" | head -1 | cut -d= -f2-)
+              if [ -z "$PG_PASSWORD" ] || [ "$PG_PASSWORD" = "change-me" ]; then
+                PG_PASSWORD=$(grep -E '^DATABASE_URL=' "$PHARMA_ENV" | head -1 | sed -E 's|.*://[^:]+:([^@]+)@.*|\1|')
+              fi
+              mkdir -p "$ENV_DIR"
+              cat > "$ENV_FILE" <<EOF
+            DJANGO_SECRET_KEY=${SECRET_KEY}
+            POSTGRES_HOST=host.docker.internal
+            POSTGRES_PORT=5432
+            POSTGRES_DB=healthcare_dev
+            POSTGRES_USER=healthcare
+            POSTGRES_PASSWORD=${PG_PASSWORD}
+            DEV_FRONTEND_PORT=3005
+            DASHBOARD_REQUIRE_AUTH=1
+            PIPELINE_SYNC_INTERVAL=300
+            EOF
+              chmod 600 "$ENV_FILE"
+            fi
+
+            # Build and deploy
+            PROJECT_NAME="dashboard-dev"
+
+            echo "Building containers..."
+            docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build
+
+            echo "Starting containers..."
+            docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down --remove-orphans || true
+            docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
+
+            # Update Nginx config for the dev dashboards site
+            echo "Updating Nginx..."
+            if [ -f /etc/letsencrypt/live/dev.dashboards.seefmed.com/fullchain.pem ]; then
+              sudo cp "${REPO_DIR}/deploy/nginx/dev.conf" /etc/nginx/sites-available/devdashboards.conf
+            else
+              sudo cp "${REPO_DIR}/deploy/nginx/dev.bootstrap.conf" /etc/nginx/sites-available/devdashboards.conf
+            fi
+            sudo ln -sf /etc/nginx/sites-available/devdashboards.conf /etc/nginx/sites-enabled/
+            sudo nginx -t && sudo systemctl reload nginx || echo "WARNING: Nginx reload failed"
+
+            # Health check
+            sleep 15
+            echo "Container status:"
+            docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps || true
+            echo "Container logs (last 30 lines):"
+            docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" logs --tail=30 || true
+
+            echo "=== Dashboard DEV Deployment completed at $(date -u) ==="
+
+      - name: Notify on failure
+        if: failure()
+        run: echo "::error::Dashboard DEV deployment failed! Check the logs above."
