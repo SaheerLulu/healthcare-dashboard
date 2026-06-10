@@ -65,8 +65,10 @@ services:
   # ---- React frontend (nginx serving vite build) ----
   frontend:
     build:
-      context: ../frontend
-      dockerfile: Dockerfile
+      # Repo root: the build needs frontend/ plus the legacy src/app/data
+      # module still imported by some pages (see frontend/Dockerfile).
+      context: ..
+      dockerfile: frontend/Dockerfile
     container_name: dashboard-dev-frontend
     ports:
       - "${DEV_FRONTEND_PORT:-3005}:80"

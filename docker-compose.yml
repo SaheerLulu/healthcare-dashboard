@@ -62,8 +62,10 @@ services:
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      # Repo root: the build needs frontend/ plus the legacy src/app/data
+      # module still imported by some pages (see frontend/Dockerfile).
+      context: .
+      dockerfile: frontend/Dockerfile
     image: seefmed/healthcare-dashboard-frontend:latest
     depends_on:
       backend:
