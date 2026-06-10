@@ -33,7 +33,9 @@ COPY --from=builder /app/frontend/dist /usr/share/nginx/html
 
 EXPOSE 80
 
+# 127.0.0.1, not localhost: nginx listens on IPv4 only and busybox
+# wget prefers ::1 for localhost, which made the probe fail.
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-  CMD wget -qO- http://localhost/ > /dev/null 2>&1 || exit 1
+  CMD wget -qO- http://127.0.0.1/ > /dev/null 2>&1 || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

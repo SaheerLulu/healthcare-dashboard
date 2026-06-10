@@ -48,6 +48,9 @@ services:
         condition: service_healthy
     command: ["python3", "manage.py", "run_all_pipelines"]
     restart: "no"
+    # The image healthcheck probes gunicorn, which this service doesn't run.
+    healthcheck:
+      disable: true
 
   # ---- Periodic incremental ETL sync ----
   scheduler:
@@ -61,6 +64,9 @@ services:
                python3 manage.py run_all_pipelines || echo 'pipeline run failed';
                sleep ${PIPELINE_SYNC_INTERVAL:-300};
              done"
+    # The image healthcheck probes gunicorn, which this service doesn't run.
+    healthcheck:
+      disable: true
 
   # ---- React frontend (nginx serving vite build) ----
   frontend:
