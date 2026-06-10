@@ -323,12 +323,14 @@ class ReportFinancial(models.Model):
     location_id = models.IntegerField(null=True, blank=True, db_index=True)
     location_name = models.CharField(max_length=255, blank=True)
 
-    # Account dimension
-    account_code = models.CharField(max_length=10, db_index=True)
+    # Account dimension. Lengths mirror core_chartofaccount upstream —
+    # per-store codes like "1125-C19-L10" are 12 chars, which overflowed
+    # the old max_length=10 on Postgres (SQLite never enforced it).
+    account_code = models.CharField(max_length=20, db_index=True)
     account_name = models.CharField(max_length=255, blank=True)
     account_type = models.CharField(max_length=20, db_index=True)
-    account_subtype = models.CharField(max_length=30, blank=True)
-    parent_account_code = models.CharField(max_length=10, blank=True)
+    account_subtype = models.CharField(max_length=50, blank=True)
+    parent_account_code = models.CharField(max_length=20, blank=True)
     parent_account_name = models.CharField(max_length=255, blank=True)
 
     # Measures
@@ -337,7 +339,7 @@ class ReportFinancial(models.Model):
     net_amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
 
     # Party dimension
-    party_type = models.CharField(max_length=10, blank=True)
+    party_type = models.CharField(max_length=20, blank=True)
     party_id = models.IntegerField(null=True, blank=True)
     party_name = models.CharField(max_length=255, blank=True)
     line_narration = models.CharField(max_length=500, blank=True)
