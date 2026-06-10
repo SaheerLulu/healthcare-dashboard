@@ -132,9 +132,10 @@ def pnl_trend(request):
     # +Profit.
     sales_qs = apply_dim_filters(
         apply_common_filters(ReportSales.objects.all(), f), f, _SALES_DIMS)
-    revenue_trend = {
-        r['sale_month']: float(r['v'] or 0)
-        for r in sales_qs.values('sale_month').annotate(v=Sum('line_total'))
+    sales_trend = {
+        r['sale_month']: (float(r['v'] or 0), float(r['gm'] or 0))
+        for r in sales_qs.values('sale_month')
+        .annotate(v=Sum('line_total'), gm=Sum('gross_margin'))
     }
     expense_trend = {
         r['entry_month']: float(r['v'] or 0)
@@ -143,7 +144,7 @@ def pnl_trend(request):
         .annotate(v=Sum('debit') - Sum('credit'))
     }
 
-    periods = sorted(set(list(revenue_trend.keys()) + list(expense_trend.keys())))
+    periods = sorted(set(list(sales_trend.keys()) + list(expense_trend.keys())))
     if not periods:
         periods = [p for p, _ in _recent_months(f['start_date'], f['end_date'])]
 
@@ -151,7 +152,7 @@ def pnl_trend(request):
     for period in periods:
         if not period:
             continue
-        rev = revenue_trend.get(period, 0)
+        rev, gross = sales_trend.get(period, (0, 0))
         exp = expense_trend.get(period, 0)
         data.append({
             'period': period,
@@ -159,7 +160,9 @@ def pnl_trend(request):
             'entry_month': period,
             'revenue': rev,
             'expenses': exp,
-            'net_profit': rev - exp,
+            # Same definition as the headline P&L: sales gross margin
+            # minus operating expenses — monthly nets sum to the card.
+            'net_profit': gross - exp,
         })
     return Response(data)
 
