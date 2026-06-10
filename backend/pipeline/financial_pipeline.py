@@ -7,6 +7,7 @@ import time
 import traceback
 from decimal import Decimal, ROUND_HALF_UP
 
+from django.db import connection
 from django.db.models import Sum
 
 from source_models.models import (
@@ -18,7 +19,10 @@ from source_models.models import (
 )
 from reports.models import ReportFinancial, ReportGST, ReportTDS
 from pipeline.models import PipelineLog, PipelineError
-from pipeline.inventory_pipeline import get_fiscal_year
+from pipeline.inventory_pipeline import (
+    get_fiscal_year, _unresolved_ids, _retry_q, _finalize_log,
+    _sweep_vanished_retries,
+)
 
 logger = logging.getLogger('pipeline')
 
@@ -53,6 +57,29 @@ class FinancialPipeline:
         self._customer_cache = {}
         self._supplier_cache = {}
         self._account_cache = {}
+        self._journal_flag_cols = None
+        self.total_errors = 0
+
+    def _journal_exclusion_columns(self):
+        """Real money excludes optional/memorandum journal entries.
+
+        Newer accounting schemas added ``is_optional`` / ``is_memorandum`` to
+        journals_journalentry; older DB snapshots lack them. Introspect the
+        live table once per pipeline instance and only exclude on columns
+        that actually exist — the RO model deliberately omits these fields
+        so SELECTs keep working against old DBs.
+        """
+        if self._journal_flag_cols is None:
+            try:
+                with connection.cursor() as cursor:
+                    desc = connection.introspection.get_table_description(
+                        cursor, 'journals_journalentry')
+                present = {col.name for col in desc}
+            except Exception:
+                present = set()
+            self._journal_flag_cols = sorted(
+                {'is_optional', 'is_memorandum'} & present)
+        return self._journal_flag_cols
 
     def _get_location_name(self, location_id):
         if not location_id:
@@ -97,18 +124,28 @@ class FinancialPipeline:
 
     def sync_journal_entries(self, since_id=0):
         """Sync posted journal entries into report_financial."""
+        retry_ids = _unresolved_ids('journal_entries')
+        if retry_ids:
+            ReportFinancial.objects.filter(source_entry_id__in=retry_ids).delete()
+
         entries = (
             JournalEntryRO.objects
-            .filter(id__gt=since_id, is_posted=True)
+            .filter(_retry_q(since_id, retry_ids), is_posted=True)
             .order_by('id')
         )
+        for col in self._journal_exclusion_columns():
+            entries = entries.extra(
+                where=[f'COALESCE("journals_journalentry"."{col}", 0) = 0'])
 
         count = 0
+        errors = 0
+        last_error = ''
         last_id = since_id
         batch = []
 
         for entry in entries.iterator():
             try:
+                mark = len(batch)
                 lines = JournalEntryLineRO.objects.filter(entry_id=entry.id)
                 entry_month = entry.date.strftime('%Y-%m')
                 fy = get_fiscal_year(entry.date)
@@ -160,22 +197,25 @@ class FinancialPipeline:
                     count += 1
 
                 _resolve_error('journal_entries', entry.id)
-                last_id = entry.id
+                last_id = max(last_id, entry.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportFinancial.objects.bulk_create(batch)
                     batch = []
 
             except Exception as e:
+                # Drop this record's partially-appended lines so a
+                # mid-record failure never flushes a partial document.
+                del batch[mark:]
+                errors += 1
+                last_error = str(e)
                 _log_error('journal_entries', entry.id, e)
 
         if batch:
             ReportFinancial.objects.bulk_create(batch)
 
-        PipelineLog.objects.update_or_create(
-            pipeline_type='journal_entries',
-            defaults={'last_synced_id': last_id, 'records_processed': count, 'status': 'success'},
-        )
+        self.total_errors += errors
+        _finalize_log('journal_entries', last_id, count, errors, last_error)
         logger.info("Journal entries synced: %d records, last_id=%d", count, last_id)
         return count
 
@@ -192,19 +232,33 @@ class FinancialPipeline:
         total += self._sync_rcm(since_ids.get('rcm', 0))
         return total
 
+    @staticmethod
+    def _gst_retry_ids(pipeline_type):
+        """Fetch unresolved error ids and purge their report_gst rows."""
+        retry_ids = _unresolved_ids(pipeline_type)
+        if retry_ids:
+            ReportGST.objects.filter(
+                source_table=pipeline_type, source_id__in=retry_ids,
+            ).delete()
+        return retry_ids
+
     def _sync_gstr1(self, since_id=0):
+        retry_ids = self._gst_retry_ids('gstr1')
         entries = (
             GSTR1EntryRO.objects
-            .filter(id__gt=since_id, is_active=True)
+            .filter(_retry_q(since_id, retry_ids), is_active=True)
             .order_by('id')
         )
 
         count = 0
+        errors = 0
+        last_error = ''
         last_id = since_id
         batch = []
 
         for e in entries.iterator():
             try:
+                mark = len(batch)
                 fy = get_fiscal_year_from_period(e.period)
                 loc_name = self._get_location_name(e.location_id)
 
@@ -246,34 +300,43 @@ class FinancialPipeline:
                     source_type=e.source_type or '',
                 ))
                 count += 1
-                last_id = e.id
+                last_id = max(last_id, e.id)
+                _resolve_error('gstr1', e.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportGST.objects.bulk_create(batch)
                     batch = []
 
             except Exception as ex:
+                # Drop this record's partially-appended lines so a
+                # mid-record failure never flushes a partial document.
+                del batch[mark:]
+                errors += 1
+                last_error = str(ex)
                 _log_error('gstr1', e.id, ex)
 
         if batch:
             ReportGST.objects.bulk_create(batch)
 
-        PipelineLog.objects.update_or_create(
-            pipeline_type='gstr1',
-            defaults={'last_synced_id': last_id, 'records_processed': count, 'status': 'success'},
-        )
+        self.total_errors += errors
+        _finalize_log('gstr1', last_id, count, errors, last_error)
         logger.info("GSTR-1 synced: %d records", count)
         return count
 
     def _sync_gstr3b(self, since_id=0):
-        entries = GSTR3BSummaryRO.objects.filter(id__gt=since_id).order_by('id')
+        retry_ids = self._gst_retry_ids('gstr3b')
+        entries = GSTR3BSummaryRO.objects.filter(
+            _retry_q(since_id, retry_ids)).order_by('id')
 
         count = 0
+        errors = 0
+        last_error = ''
         last_id = since_id
         batch = []
 
         for e in entries.iterator():
             try:
+                mark = len(batch)
                 fy = get_fiscal_year_from_period(e.period)
                 loc_name = self._get_location_name(e.location_id)
 
@@ -300,34 +363,43 @@ class FinancialPipeline:
                     igst=Decimal(str(e.outward_igst or 0)),
                 ))
                 count += 1
-                last_id = e.id
+                last_id = max(last_id, e.id)
+                _resolve_error('gstr3b', e.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportGST.objects.bulk_create(batch)
                     batch = []
 
             except Exception as ex:
+                # Drop this record's partially-appended lines so a
+                # mid-record failure never flushes a partial document.
+                del batch[mark:]
+                errors += 1
+                last_error = str(ex)
                 _log_error('gstr3b', e.id, ex)
 
         if batch:
             ReportGST.objects.bulk_create(batch)
 
-        PipelineLog.objects.update_or_create(
-            pipeline_type='gstr3b',
-            defaults={'last_synced_id': last_id, 'records_processed': count, 'status': 'success'},
-        )
+        self.total_errors += errors
+        _finalize_log('gstr3b', last_id, count, errors, last_error)
         logger.info("GSTR-3B synced: %d records", count)
         return count
 
     def _sync_gstr2b(self, since_id=0):
-        entries = GSTR2BEntryRO.objects.filter(id__gt=since_id).order_by('id')
+        retry_ids = self._gst_retry_ids('gstr2b')
+        entries = GSTR2BEntryRO.objects.filter(
+            _retry_q(since_id, retry_ids)).order_by('id')
 
         count = 0
+        errors = 0
+        last_error = ''
         last_id = since_id
         batch = []
 
         for e in entries.iterator():
             try:
+                mark = len(batch)
                 fy = get_fiscal_year_from_period(e.period)
                 loc_name = self._get_location_name(e.location_id)
 
@@ -350,34 +422,43 @@ class FinancialPipeline:
                     match_status=e.match_status or '',
                 ))
                 count += 1
-                last_id = e.id
+                last_id = max(last_id, e.id)
+                _resolve_error('gstr2b', e.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportGST.objects.bulk_create(batch)
                     batch = []
 
             except Exception as ex:
+                # Drop this record's partially-appended lines so a
+                # mid-record failure never flushes a partial document.
+                del batch[mark:]
+                errors += 1
+                last_error = str(ex)
                 _log_error('gstr2b', e.id, ex)
 
         if batch:
             ReportGST.objects.bulk_create(batch)
 
-        PipelineLog.objects.update_or_create(
-            pipeline_type='gstr2b',
-            defaults={'last_synced_id': last_id, 'records_processed': count, 'status': 'success'},
-        )
+        self.total_errors += errors
+        _finalize_log('gstr2b', last_id, count, errors, last_error)
         logger.info("GSTR-2B synced: %d records", count)
         return count
 
     def _sync_itc(self, since_id=0):
-        entries = ITCReconciliationRO.objects.filter(id__gt=since_id).order_by('id')
+        retry_ids = self._gst_retry_ids('itc')
+        entries = ITCReconciliationRO.objects.filter(
+            _retry_q(since_id, retry_ids)).order_by('id')
 
         count = 0
+        errors = 0
+        last_error = ''
         last_id = since_id
         batch = []
 
         for e in entries.iterator():
             try:
+                mark = len(batch)
                 fy = get_fiscal_year_from_period(e.period)
                 loc_name = self._get_location_name(e.location_id)
 
@@ -400,34 +481,43 @@ class FinancialPipeline:
                     itc_igst=Decimal(str(e.gstr2b_igst or 0)),
                 ))
                 count += 1
-                last_id = e.id
+                last_id = max(last_id, e.id)
+                _resolve_error('itc', e.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportGST.objects.bulk_create(batch)
                     batch = []
 
             except Exception as ex:
+                # Drop this record's partially-appended lines so a
+                # mid-record failure never flushes a partial document.
+                del batch[mark:]
+                errors += 1
+                last_error = str(ex)
                 _log_error('itc', e.id, ex)
 
         if batch:
             ReportGST.objects.bulk_create(batch)
 
-        PipelineLog.objects.update_or_create(
-            pipeline_type='itc',
-            defaults={'last_synced_id': last_id, 'records_processed': count, 'status': 'success'},
-        )
+        self.total_errors += errors
+        _finalize_log('itc', last_id, count, errors, last_error)
         logger.info("ITC reconciliation synced: %d records", count)
         return count
 
     def _sync_rcm(self, since_id=0):
-        entries = RCMEntryRO.objects.filter(id__gt=since_id).order_by('id')
+        retry_ids = self._gst_retry_ids('rcm')
+        entries = RCMEntryRO.objects.filter(
+            _retry_q(since_id, retry_ids)).order_by('id')
 
         count = 0
+        errors = 0
+        last_error = ''
         last_id = since_id
         batch = []
 
         for e in entries.iterator():
             try:
+                mark = len(batch)
                 fy = get_fiscal_year_from_period(e.period)
                 loc_name = self._get_location_name(e.location_id)
 
@@ -448,35 +538,47 @@ class FinancialPipeline:
                     igst=Decimal(str(e.igst or 0)),
                 ))
                 count += 1
-                last_id = e.id
+                last_id = max(last_id, e.id)
+                _resolve_error('rcm', e.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportGST.objects.bulk_create(batch)
                     batch = []
 
             except Exception as ex:
+                # Drop this record's partially-appended lines so a
+                # mid-record failure never flushes a partial document.
+                del batch[mark:]
+                errors += 1
+                last_error = str(ex)
                 _log_error('rcm', e.id, ex)
 
         if batch:
             ReportGST.objects.bulk_create(batch)
 
-        PipelineLog.objects.update_or_create(
-            pipeline_type='rcm',
-            defaults={'last_synced_id': last_id, 'records_processed': count, 'status': 'success'},
-        )
+        self.total_errors += errors
+        _finalize_log('rcm', last_id, count, errors, last_error)
         logger.info("RCM synced: %d records", count)
         return count
 
     def sync_tds_entries(self, since_id=0):
         """Sync TDS deductions into report_tds, joining challan data."""
-        deductions = TDSDeductionRO.objects.filter(id__gt=since_id).order_by('id')
+        retry_ids = _unresolved_ids('tds')
+        if retry_ids:
+            ReportTDS.objects.filter(source_id__in=retry_ids).delete()
+
+        deductions = TDSDeductionRO.objects.filter(
+            _retry_q(since_id, retry_ids)).order_by('id')
 
         count = 0
+        errors = 0
+        last_error = ''
         last_id = since_id
         batch = []
 
         for d in deductions.iterator():
             try:
+                mark = len(batch)
                 trans_month = d.transaction_date.strftime('%Y-%m')
                 fy = get_fiscal_year(d.transaction_date)
                 loc_name = self._get_location_name(d.location_id)
@@ -515,33 +617,43 @@ class FinancialPipeline:
                     location_name=loc_name,
                 ))
                 count += 1
-                last_id = d.id
+                last_id = max(last_id, d.id)
+                _resolve_error('tds', d.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportTDS.objects.bulk_create(batch)
                     batch = []
 
             except Exception as e:
+                # Drop this record's partially-appended lines so a
+                # mid-record failure never flushes a partial document.
+                del batch[mark:]
+                errors += 1
+                last_error = str(e)
                 _log_error('tds', d.id, e)
 
         if batch:
             ReportTDS.objects.bulk_create(batch)
 
-        PipelineLog.objects.update_or_create(
-            pipeline_type='tds',
-            defaults={'last_synced_id': last_id, 'records_processed': count, 'status': 'success'},
-        )
+        self.total_errors += errors
+        _finalize_log('tds', last_id, count, errors, last_error)
         logger.info("TDS deductions synced: %d records, last_id=%d", count, last_id)
         return count
 
     def synthesise_tds_from_purchases(self):
         """Source DB has zero TDS rows. Derive synthetic TDS deductions from
         ReportPurchases where the bill is > ₹50,000 (Section 194Q threshold).
-        Only runs if ReportTDS is empty after the normal sync."""
-        if ReportTDS.objects.exists():
+        Never runs when the source actually has TDS rows; otherwise fills in
+        only the bills not already present (idempotent, and re-fills a
+        window deleted by --resync-days)."""
+        if TDSDeductionRO.objects.exists():
             return 0
         from reports.models import ReportPurchases
         from datetime import date as _date, timedelta as _td
+
+        existing_ids = set(
+            ReportTDS.objects.values_list('source_id', flat=True)
+        )
 
         TDS_THRESHOLD = Decimal('50000')
         TDS_RATE = Decimal('0.10')  # 0.10% u/s 194Q
@@ -558,6 +670,8 @@ class FinancialPipeline:
         batch = []
         for b in big_bills:
             bill_id = b['source_id']
+            if bill_id in existing_ids:
+                continue
             taxable = Decimal(str(b['bill_total_agg'] or 0))
             if taxable < TDS_THRESHOLD:
                 continue
@@ -598,6 +712,17 @@ class FinancialPipeline:
     def run_all(self, full=False):
         """Run all financial pipeline steps."""
         start = time.time()
+        self.total_errors = 0
+
+        _sweep_vanished_retries([
+            ('journal_entries', JournalEntryRO.objects.filter(is_posted=True)),
+            ('gstr1', GSTR1EntryRO.objects.filter(is_active=True)),
+            ('gstr3b', GSTR3BSummaryRO.objects.all()),
+            ('gstr2b', GSTR2BEntryRO.objects.all()),
+            ('itc', ITCReconciliationRO.objects.all()),
+            ('rcm', RCMEntryRO.objects.all()),
+            ('tds', TDSDeductionRO.objects.all()),
+        ])
 
         if full:
             logger.info("Full financial pipeline refresh – clearing existing data")
@@ -627,12 +752,16 @@ class FinancialPipeline:
         total = sum(results.values())
         results['total'] = total
         results['duration_seconds'] = round(duration, 2)
+        results['errors'] = self.total_errors
 
         PipelineLog.objects.create(
             pipeline_type='financial_all',
             last_synced_id=0,
             records_processed=total,
-            status='success',
+            status='success' if self.total_errors == 0 else 'partial',
+            error_message='' if self.total_errors == 0 else (
+                f'{self.total_errors} record(s) failed; see pipeline_error'
+            ),
             duration_seconds=duration,
         )
 

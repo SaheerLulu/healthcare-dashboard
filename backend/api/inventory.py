@@ -6,10 +6,9 @@ from django.db.models import Sum, Count, Avg, Q, F, Max, Min, StdDev
 from rest_framework.decorators import api_view, permission_classes
 from .permissions import DashboardPermission
 from rest_framework.response import Response
-from rest_framework.pagination import PageNumberPagination
 
 from reports.models import ReportInventory, ReportSales, ReportPurchases
-from .helpers import parse_filters
+from .helpers import parse_filters, apply_dim_filters, apply_ordering, paginate_detail
 
 
 def _fmt_inr(value):
@@ -70,8 +69,36 @@ def _latest_snapshot():
     return ReportInventory.objects.filter(snapshot_date=latest['snapshot_date'])
 
 
+# Inventory dimension vocabulary (docs/DRILLTHROUGH_DESIGN.md §1) — param
+# name → ReportInventory column. Applied inside _apply_inventory_filters so
+# every snapshot endpoint honors page filters / drill-through params.
+INV_DIMS = {
+    'product_id': 'product_id',
+    'product_name': 'product_name',
+    'company': 'product_company',
+    'molecule': 'product_molecule',
+    'batch_no': 'batch_no',
+    'expiry_status': 'expiry_status',
+    'expiry_bucket': 'days_to_expiry',  # special-cased range filter in helpers
+    'movement_status': 'movement_status',
+    'abc_class': 'abc_class',
+    'ved_class': 'product_ved_class',
+    'reorder_needed': 'reorder_needed',
+}
+
+# Subset valid on ReportSales / ReportPurchases flow tables (only dims whose
+# columns exist there: product / company / batch; category is handled by the
+# legacy category filters alongside).
+FLOW_DIMS = {
+    'product_id': 'product_id',
+    'product_name': 'product_name',
+    'company': 'product_company',
+    'batch_no': 'batch_no',
+}
+
+
 def _apply_inventory_filters(qs, f):
-    """Apply location + category filters to ReportInventory queryset."""
+    """Apply location + category + inventory dimension filters to ReportInventory queryset."""
     if 'location_id' in f:
         qs = qs.filter(location_id=f['location_id'])
     elif 'location_ids' in f:
@@ -80,7 +107,28 @@ def _apply_inventory_filters(qs, f):
         qs = qs.filter(product_category__in=f['categories'])
     elif 'category' in f:
         qs = qs.filter(product_category=f['category'])
-    return qs
+    return apply_dim_filters(qs, f, INV_DIMS)
+
+
+# Dims with no column on the flow tables. When one is active, ratio endpoints
+# (turnover, ROI, inventory-to-sales) must restrict the sales/purchase flows
+# to the products in the filtered snapshot — otherwise the snapshot numerator
+# shrinks while the flow denominator covers all goods, corrupting the ratio
+# (e.g. "A-class turnover" computed with all-products COGS).
+_SNAPSHOT_ONLY_DIMS = (
+    'expiry_status', 'expiry_bucket', 'movement_status',
+    'abc_class', 'ved_class', 'reorder_needed',
+)
+
+
+def _align_flow_to_snapshot(flow_qs, f):
+    if any(d in f for d in _SNAPSHOT_ONLY_DIMS):
+        product_ids = (
+            _apply_inventory_filters(_latest_snapshot(), f)
+            .values_list('product_id', flat=True).distinct()
+        )
+        flow_qs = flow_qs.filter(product_id__in=list(product_ids))
+    return flow_qs
 
 
 @api_view(['GET'])
@@ -246,6 +294,8 @@ def movement_trend(request):
     elif 'category' in f:
         p_qs = p_qs.filter(product_category=f['category'])
         s_qs = s_qs.filter(product_category=f['category'])
+    p_qs = apply_dim_filters(p_qs, f, FLOW_DIMS)
+    s_qs = apply_dim_filters(s_qs, f, FLOW_DIMS)
 
     inbound_rows = list(
         p_qs.values('purchase_month')
@@ -405,6 +455,8 @@ def forecast(request):
         sales_qs = sales_qs.filter(product_category__in=f['categories'])
     elif 'category' in f:
         sales_qs = sales_qs.filter(product_category=f['category'])
+    sales_qs = apply_dim_filters(sales_qs, f, FLOW_DIMS)
+    sales_qs = _align_flow_to_snapshot(sales_qs, f)
 
     monthly_sales = {
         r['sale_month']: float(r['q'] or 0)
@@ -624,6 +676,8 @@ def investment(request):
         sales_qs = sales_qs.filter(product_category__in=f['categories'])
     elif 'category' in f:
         sales_qs = sales_qs.filter(product_category=f['category'])
+    sales_qs = apply_dim_filters(sales_qs, f, FLOW_DIMS)
+    sales_qs = _align_flow_to_snapshot(sales_qs, f)
 
     margin_by_cat = {
         r['product_category']: float(r['m'] or 0)
@@ -789,6 +843,8 @@ def carrying_cost(request):
     elif 'category' in f:
         p_qs = p_qs.filter(product_category=f['category'])
         s_qs = s_qs.filter(product_category=f['category'])
+    p_qs = apply_dim_filters(p_qs, f, FLOW_DIMS)
+    s_qs = apply_dim_filters(s_qs, f, FLOW_DIMS)
 
     purchase_by_month = {
         r['purchase_month']: float(r['v'] or 0)
@@ -864,6 +920,8 @@ def optimization(request):
         sales_qs = sales_qs.filter(product_category__in=f['categories'])
     elif 'category' in f:
         sales_qs = sales_qs.filter(product_category=f['category'])
+    sales_qs = apply_dim_filters(sales_qs, f, FLOW_DIMS)
+    sales_qs = _align_flow_to_snapshot(sales_qs, f)
 
     monthly_sales_by_cat = {
         r['product_category']: float(r['v'] or 0)
@@ -996,6 +1054,8 @@ def turnover(request):
         sales_qs = sales_qs.filter(product_category__in=f['categories'])
     elif 'category' in f:
         sales_qs = sales_qs.filter(product_category=f['category'])
+    sales_qs = apply_dim_filters(sales_qs, f, FLOW_DIMS)
+    sales_qs = _align_flow_to_snapshot(sales_qs, f)
     monthly_agg = {
         r['sale_month']: r
         for r in sales_qs.values('sale_month').annotate(
@@ -1038,6 +1098,8 @@ def turnover(request):
         seg_sales_qs = seg_sales_qs.filter(location_id=f['location_id'])
     elif 'location_ids' in f:
         seg_sales_qs = seg_sales_qs.filter(location_id__in=f['location_ids'])
+    seg_sales_qs = apply_dim_filters(seg_sales_qs, f, FLOW_DIMS)
+    seg_sales_qs = _align_flow_to_snapshot(seg_sales_qs, f)
     product_status = dict(
         inv_qs.values_list('product_id', 'movement_status').distinct()
     )
@@ -1226,6 +1288,7 @@ def batch_detail(request):
         p_qs = p_qs.filter(product_category__in=f['categories'])
     elif 'category' in f:
         p_qs = p_qs.filter(product_category=f['category'])
+    p_qs = apply_dim_filters(p_qs, f, FLOW_DIMS)
     lot_profitability = []
     supplier_rows = list(
         p_qs.values('supplier_name')
@@ -1328,6 +1391,8 @@ def investment_detail(request):
         sales_qs = sales_qs.filter(product_category__in=f['categories'])
     elif 'category' in f:
         sales_qs = sales_qs.filter(product_category=f['category'])
+    sales_qs = apply_dim_filters(sales_qs, f, FLOW_DIMS)
+    sales_qs = _align_flow_to_snapshot(sales_qs, f)
 
     monthly_profit = float(sales_qs.aggregate(m=Sum('gross_margin'))['m'] or 0)
     monthly_revenue = float(sales_qs.aggregate(r=Sum('line_total'))['r'] or 0)
@@ -1657,23 +1722,25 @@ def days_of_cover(request):
 @permission_classes([DashboardPermission])
 def detail_view(request):
     f = parse_filters(request)
-    qs = _apply_inventory_filters(_latest_snapshot(), f).order_by('-stock_value_cost')
-    # Support drill-through filters from Executive Summary
+    # Dimension filters (reorder_needed/expiry_status/movement_status/...) are
+    # applied via INV_DIMS inside _apply_inventory_filters. Keep a legacy
+    # fallback for drill-through params whose values the strict parser drops
+    # (e.g. reorder_needed=yes from older Executive Summary links).
+    qs = _apply_inventory_filters(_latest_snapshot(), f)
     params = request.query_params
-    if params.get('reorder_needed'):
+    if params.get('reorder_needed') and 'reorder_needed' not in f:
         qs = qs.filter(reorder_needed=True)
-    if params.get('expiry_status'):
+    if params.get('expiry_status') and 'expiry_status' not in f:
         qs = qs.filter(expiry_status=params['expiry_status'])
-    if params.get('movement_status'):
+    if params.get('movement_status') and 'movement_status' not in f:
         qs = qs.filter(movement_status=params['movement_status'])
-    qs = qs.values(
+    columns = (
         'product_name', 'product_code', 'product_category',
         'batch_no', 'expiry_month', 'expiry_status',
         'qty_on_hand', 'purchase_rate', 'mrp',
         'stock_value_cost', 'movement_status', 'abc_class',
         'days_of_stock', 'location_name',
     )
-
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    return paginator.get_paginated_response(list(page) if page else [])
+    qs = qs.values(*columns)
+    qs = apply_ordering(qs, f, allowed=columns, default='-stock_value_cost')
+    return paginate_detail(request, qs)

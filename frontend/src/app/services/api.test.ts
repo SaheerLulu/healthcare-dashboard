@@ -58,13 +58,27 @@ describe('api axios instance', () => {
     expect(cfg.headers.Authorization).toBeUndefined();
   });
 
-  it('response interceptor logs a warning on 401 then rejects', async () => {
+  it('response interceptor signs out on 401 when no refresh token exists', async () => {
+    localStorage.setItem('access_token', 'expired-jwt');
     const api = (await import('./api')).default;
     console.warn = vi.fn();
     const handler = (api.interceptors.response as any).handlers[0].rejected;
-    await expect(handler({ response: { status: 401 } })).rejects.toBeDefined();
+    // err.config present marks a retryable request; with no refresh_token
+    // in storage the interceptor warns, clears tokens and rejects.
+    const err = { response: { status: 401 }, config: { headers: {} } };
+    await expect(handler(err)).rejects.toBeDefined();
     expect(console.warn).toHaveBeenCalledTimes(1);
     expect((console.warn as any).mock.calls[0][0]).toMatch(/auth failed/i);
+    expect(localStorage.getItem('access_token')).toBeNull();
+  });
+
+  it('response interceptor rejects 401s without a config untouched', async () => {
+    const api = (await import('./api')).default;
+    console.warn = vi.fn();
+    const handler = (api.interceptors.response as any).handlers[0].rejected;
+    const err = { response: { status: 401 } };
+    await expect(handler(err)).rejects.toBe(err);
+    expect(console.warn).not.toHaveBeenCalled();
   });
 
   it('response interceptor passes 5xx through unchanged', async () => {

@@ -71,13 +71,21 @@ def _entries(filters):
 
     try:
         if DispatchEntryRO.objects.exists():
-            qs = DispatchEntryRO.objects.all()
+            # Real register rows: honor the requested date range
+            # (DRILLTHROUGH_DESIGN.md §6).
+            qs = DispatchEntryRO.objects.filter(
+                dispatch_date__gte=filters['start_date'],
+                dispatch_date__lte=filters['end_date'],
+            )
             if 'location_id' in filters:
                 qs = qs.filter(location_id=filters['location_id'])
             elif 'location_ids' in filters:
                 qs = qs.filter(location_id__in=filters['location_ids'])
             return qs
 
+        # Synth fallback: dates are fabricated from B2B order dates, so we
+        # deliberately do NOT date-filter here — a narrow window would make
+        # the demo page look randomly empty.
         b2b_qs = B2BSalesOrderRO.objects.select_related('customer').all()
         if 'location_id' in filters:
             b2b_qs = b2b_qs.filter(location_id=filters['location_id'])
@@ -88,11 +96,32 @@ def _entries(filters):
         return []
 
 
+def _apply_entry_dims(entries, filters):
+    """Apply `status` / `courier_partner` dimension filters.
+
+    `entries` is either a real DispatchEntryRO queryset or a list of
+    synthesized dicts, so filter accordingly (python for the dict list).
+    """
+    statuses = filters.get('status')
+    couriers = filters.get('courier_partner')
+    if isinstance(entries, list):
+        if statuses:
+            entries = [e for e in entries if e['status'] in statuses]
+        if couriers:
+            entries = [e for e in entries if e['courier_partner'] in couriers]
+        return entries
+    if statuses:
+        entries = entries.filter(status__in=statuses)
+    if couriers:
+        entries = entries.filter(courier_partner__in=couriers)
+    return entries
+
+
 @api_view(['GET'])
 @permission_classes([DashboardPermission])
 def pipeline(request):
     f = parse_filters(request)
-    entries = _entries(f)
+    entries = _apply_entry_dims(_entries(f), f)
 
     if isinstance(entries, list):  # synth fallback
         buckets: dict = {}
@@ -115,7 +144,7 @@ def pipeline(request):
 @permission_classes([DashboardPermission])
 def courier_performance(request):
     f = parse_filters(request)
-    entries = _entries(f)
+    entries = _apply_entry_dims(_entries(f), f)
 
     if isinstance(entries, list):  # synth fallback
         buckets: dict = {}
@@ -153,7 +182,7 @@ def courier_performance(request):
 @permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
-    entries = _entries(f)
+    entries = _apply_entry_dims(_entries(f), f)
 
     if isinstance(entries, list):  # synth fallback
         rows = sorted(entries, key=lambda r: r['dispatch_date'] or '', reverse=True)[:50]

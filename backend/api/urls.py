@@ -41,6 +41,7 @@ urlpatterns = [
     path('sales/returns/profit-impact/', sales.returns_profit_impact),
     path('sales/detail/', sales.detail),
     path('sales/returns/detail/', sales.returns_detail),
+    path('sales/bills/', sales.bills),
 
     # ─── Financial Deep Dive ──────────────────────────────────────────
     path('financial/pnl/', financial.pnl),
@@ -84,6 +85,7 @@ urlpatterns = [
     path('procurement/savings/', procurement.savings),
     path('procurement/po-status/', procurement.po_status),
     path('procurement/detail/', procurement.detail),
+    path('procurement/bills/', procurement.bills),
 
     # ─── GST Compliance ───────────────────────────────────────────────
     path('gst/overview/', compliance.gst_overview),

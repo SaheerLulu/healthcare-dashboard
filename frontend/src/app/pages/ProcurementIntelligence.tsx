@@ -1,19 +1,17 @@
-import { useState, MouseEvent } from 'react';
-import { useNavigate } from 'react-router';
+import { useState } from 'react';
 import { KPICard } from '../components/KPICard';
 import { ChartCard } from '../components/ChartCard';
-import { ContextMenu } from '../components/ContextMenu';
 import { useCrossFilter } from '../contexts/CrossFilterContext';
+import { DrillSource } from '../contexts/DrillSourceContext';
+import { useDrillThrough } from '../hooks/useDrillThrough';
+import { DrillFilter, monthOf } from '../utils/drill';
 import {
   BarChart,
   Bar,
   LineChart,
   Line,
-  ScatterChart,
-  Scatter,
   XAxis,
   YAxis,
-  ZAxis,
   CartesianGrid,
   Tooltip,
   Legend,
@@ -24,27 +22,88 @@ import {
   ComposedChart,
 } from 'recharts';
 import { useApiData } from '../hooks/useApiData';
-import { toSuppliers, toMonthlyTrend, numericize } from '../services/transforms';
+import { toSuppliers, toMonthlyTrend, numericize, monthLabel } from '../services/transforms';
 import { formatIndianCurrencyAbbreviated } from '../utils/formatters';
 
 
 const COLORS = ['#0D9488', '#4F46E5', '#F59E0B', '#EF4444', '#10B981'];
 
+const DETAIL = '/detail/purchase';
+
+const money = (v: any) => formatIndianCurrencyAbbreviated(Number(v) || 0);
+
+// Data-behind columns (ChartCard table + CSV).
+const SUPPLIER_PERF_COLUMNS = [
+  { key: 'supplier', label: 'Supplier' },
+  { key: 'orders', label: 'Orders' },
+  { key: 'value', label: 'PO Value', format: money },
+  { key: 'onTime', label: 'On-Time %' },
+  { key: 'quality', label: 'Quality %' },
+  { key: 'rating', label: 'Rating' },
+  { key: 'leadTime', label: 'Lead Time (days)' },
+];
+const PO_STATUS_COLUMNS = [
+  { key: 'status', label: 'PO Status' },
+  { key: 'count', label: 'Orders' },
+];
+const PRICE_TREND_COLUMNS = [
+  { key: 'month', label: 'Month' },
+  { key: 'avgPrice', label: 'Avg Price', format: money },
+  { key: 'priceIndex', label: 'Price Index' },
+  { key: 'volatility', label: 'Volatility %' },
+  { key: 'total_value', label: 'Purchase Value', format: money },
+];
+const LEAD_TIME_COLUMNS = [
+  { key: 'supplier_name', label: 'Supplier' },
+  { key: 'min_days', label: 'Min (days)' },
+  { key: 'avg_days', label: 'Avg (days)' },
+  { key: 'max_days', label: 'Max (days)' },
+  { key: 'orders', label: 'Orders' },
+];
+const RETURNS_COLUMNS = [
+  { key: 'product_category', label: 'Category' },
+  { key: 'qty', label: 'Quantity' },
+  { key: 'value', label: 'Value', format: money },
+  { key: 'count', label: 'Lines' },
+];
+const SAVINGS_COLUMNS = [
+  { key: 'period', label: 'Month' },
+  { key: 'spend', label: 'Spend', format: money },
+  { key: 'savings', label: 'Modeled Savings', format: money },
+  { key: 'target', label: 'Savings Target', format: money },
+];
+const COST_COMPARISON_COLUMNS = [
+  { key: 'product_name', label: 'Product' },
+  { key: 'product_category', label: 'Category' },
+  { key: 'min_rate', label: 'Best Price', format: money },
+  { key: 'avg_rate', label: 'Avg Price', format: money },
+  { key: 'max_rate', label: 'Worst Price', format: money },
+  { key: 'suppliers', label: 'Suppliers' },
+];
+const PAYMENT_TERMS_COLUMNS = [
+  { key: 'supplier', label: 'Supplier' },
+  { key: 'creditDays', label: 'Credit Days' },
+  { key: 'avgPayDays', label: 'Avg Pay Days' },
+  { key: 'earlyPayDiscount', label: 'Early Pay Discount %' },
+  { key: 'onTimePercent', label: 'On-Time Payment %' },
+  { key: 'totalValue', label: 'PO Value', format: money },
+];
+
+// Provenance shared by both Supplier Cost Comparison cards.
+const COST_COMPARISON_INFO = {
+  formula: 'Best / average / worst purchase rate (₹) per product across all suppliers in the selected range.',
+  source: 'report_purchases via /procurement/cost-comparison/ (returns excluded)',
+};
+const PRICE_TREND_INFO = {
+  formula: 'Monthly average purchase rate (₹) across purchase lines, grouped by purchase month; volatility = month-on-month price variation.',
+  source: 'report_purchases via /procurement/price-trend/ (returns excluded)',
+  notes: 'Price index and volatility are derived client-side; the index defaults to 100 where the source has no baseline.',
+};
+
 export const ProcurementIntelligence = () => {
   const [activeTab, setActiveTab] = useState<'suppliers' | 'price' | 'leadtime' | 'returns' | 'savings' | 'payment'>('suppliers');
-  const navigate = useNavigate();
   const { toggleCrossFilter, activeFilters, isFiltered } = useCrossFilter();
-  const [contextMenu, setContextMenu] = useState<{
-    visible: boolean;
-    x: number;
-    y: number;
-    page: string;
-  }>({
-    visible: false,
-    x: 0,
-    y: 0,
-    page: '',
-  });
+  const { drillTo, openContextMenu, contextMenuElement } = useDrillThrough();
 
   // API integration
   const { data: apiOverview } = useApiData<any>('/procurement/overview/', {});
@@ -86,20 +145,6 @@ export const ProcurementIntelligence = () => {
     { id: 'payment', label: 'Payment Optimization' },
   ];
 
-  const handleChartRightClick = (e: MouseEvent, page: string) => {
-    e.preventDefault();
-    setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      page,
-    });
-  };
-
-  const closeContextMenu = () => {
-    setContextMenu(prev => ({ ...prev, visible: false }));
-  };
-
   const handleChartSelect = (data: any, dimension: string) => {
     if (data?.activePayload?.[0]) {
       const payload = data.activePayload[0].payload;
@@ -110,15 +155,61 @@ export const ProcurementIntelligence = () => {
 
   const hasFilter = (dimension: string) => activeFilters.some(f => f.id === dimension);
 
-  const handleDrillThrough = (page: string, filter?: any) => {
-    navigate(page, {
-      state: {
-        drillThrough: {
-          from: 'Procurement Intelligence',
-          filters: activeFilters.length > 0 ? activeFilters : filter ? [filter] : [],
-        },
-      },
-    });
+  /** Recover the raw 'YYYY-MM' month for a cross-filter value that may be a
+   *  short label ('Mar') or a bare month number — rebuilt page-locally from
+   *  the API rows (the transforms keep raw purchase_month / period keys). */
+  const rawMonthFor = (val: any): string | undefined => {
+    const s = String(val ?? '');
+    if (/^\d{4}-\d{2}/.test(s)) return s.slice(0, 7);
+    for (const r of [...apiPriceTrend, ...apiSavings]) {
+      const raw = monthOf(r);
+      if (!raw) continue;
+      if (monthLabel(raw) === s || String(Number(raw.slice(5, 7))) === s) return raw;
+    }
+    return undefined;
+  };
+
+  /** Active cross-filters translated to backend drill params (design doc §1). */
+  const translateCrossFilters = (): DrillFilter[] => {
+    const out: DrillFilter[] = [];
+    for (const f of activeFilters) {
+      const value = String(f.value);
+      switch (f.id) {
+        case 'supplier':
+          out.push({ id: 'supplier_name', label: f.label, value });
+          break;
+        case 'product':
+          out.push({ id: 'product_name', label: f.label, value });
+          break;
+        case 'category':
+        case 'returnCategory':
+          out.push({ id: 'category', label: f.label, value });
+          break;
+        case 'poStatus':
+          out.push({ id: 'state', label: f.label, value });
+          break;
+        case 'month': {
+          const raw = rawMonthFor(f.value);
+          if (raw) out.push({ id: 'month', label: f.label, value: raw });
+          break;
+        }
+        default:
+          break;
+      }
+    }
+    return out;
+  };
+
+  /** Returns-tab drills always carry is_return=true. */
+  const returnsDrillFilters = (): DrillFilter[] => [
+    ...translateCrossFilters(),
+    { id: 'is_return', label: 'Purchase returns', value: 'true' },
+  ];
+
+  /** Row filters + the page's active cross-filters (without duplicating ids). */
+  const withActive = (rowFilters: DrillFilter[]): DrillFilter[] => {
+    const ids = new Set(rowFilters.map(f => f.id));
+    return [...rowFilters, ...translateCrossFilters().filter(f => !ids.has(f.id))];
   };
 
   // Apply cross-filtering
@@ -131,6 +222,7 @@ export const ProcurementIntelligence = () => {
   );
 
   return (
+    <DrillSource name="Procurement Intelligence">
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Procurement Intelligence</h1>
@@ -152,27 +244,49 @@ export const ProcurementIntelligence = () => {
           <span className="text-xs text-gray-500 ml-auto">How procurement decisions improve profitability</span>
         </div>
         <div className="grid grid-cols-5 gap-3">
-          <div className="bg-white rounded-lg p-3 border border-green-100">
+          <div
+            className="bg-white rounded-lg p-3 border border-green-100"
+            onContextMenu={(e) => openContextMenu(e, DETAIL, translateCrossFilters(), apiOverview)}
+          >
             <div className="text-[10px] text-gray-500 mb-1">Total PO Value</div>
             <div className="text-sm font-bold text-green-700">{formatIndianCurrencyAbbreviated(apiOverview.po_value || 0)}</div>
             <div className="text-[10px] text-green-500">{apiOverview.total_pos || 0} purchase orders</div>
           </div>
-          <div className="bg-white rounded-lg p-3 border border-green-100">
+          <div
+            className="bg-white rounded-lg p-3 border border-green-100"
+            onContextMenu={(e) => openContextMenu(e, DETAIL, translateCrossFilters(), apiOverview)}
+          >
             <div className="text-[10px] text-gray-500 mb-1">Active Suppliers</div>
             <div className="text-sm font-bold text-green-700">{apiOverview.active_suppliers || 0}</div>
             <div className="text-[10px] text-green-500">Contributing to procurement</div>
           </div>
-          <div className="bg-white rounded-lg p-3 border border-amber-100">
+          <div
+            className="bg-white rounded-lg p-3 border border-amber-100"
+            onContextMenu={(e) => openContextMenu(e, DETAIL, translateCrossFilters(), apiOverview)}
+          >
             <div className="text-[10px] text-gray-500 mb-1">Avg Lead Time</div>
             <div className="text-sm font-bold text-amber-700">{apiOverview.avg_lead_time || 0} days</div>
             <div className="text-[10px] text-amber-500">Average supplier lead time</div>
           </div>
-          <div className="bg-white rounded-lg p-3 border border-red-100">
+          <div
+            className="bg-white rounded-lg p-3 border border-red-100"
+            onContextMenu={(e) => openContextMenu(e, DETAIL, returnsDrillFilters(), apiOverview)}
+          >
             <div className="text-[10px] text-gray-500 mb-1">Returns Cost</div>
             <div className="text-sm font-bold text-red-700">{formatIndianCurrencyAbbreviated(apiOverview.returns_cost || 0)}</div>
             <div className="text-[10px] text-red-500">{apiOverview.returns_count || 0} items returned</div>
           </div>
-          <div className="bg-white rounded-lg p-3 border border-teal-100">
+          <div
+            className="bg-white rounded-lg p-3 border border-teal-100"
+            onContextMenu={(e) => openContextMenu(
+              e,
+              DETAIL,
+              apiOverview.best_supplier && apiOverview.best_supplier !== '--'
+                ? withActive([{ id: 'supplier_name', label: `Supplier: ${apiOverview.best_supplier}`, value: String(apiOverview.best_supplier) }])
+                : translateCrossFilters(),
+              apiOverview,
+            )}
+          >
             <div className="text-[10px] text-gray-500 mb-1">Best Supplier</div>
             <div className="text-sm font-bold text-teal-700">{apiOverview.best_supplier || '--'}</div>
             <div className="text-[10px] text-teal-500">Highest PO value</div>
@@ -185,24 +299,46 @@ export const ProcurementIntelligence = () => {
         <KPICard
           title="Total Purchase Orders"
           value={String(apiOverview.total_pos || 0)}
-          onClick={() => handleDrillThrough('/detail/purchase')}
+          onClick={() => drillTo(DETAIL, translateCrossFilters())}
+          info={{
+            formula: 'Count of distinct purchase orders (bills) in the selected date range; purchase returns excluded.',
+            source: 'report_purchases via /procurement/overview/',
+          }}
         />
         <KPICard
           title="PO Value"
           value={formatIndianCurrencyAbbreviated(apiOverview.po_value || 0)}
+          onClick={() => drillTo(DETAIL, translateCrossFilters())}
+          info={{
+            formula: 'Sum of purchase line totals (₹, incl. GST) across all orders in the selected range; returns excluded.',
+            source: 'report_purchases via /procurement/overview/',
+          }}
         />
         <KPICard
           title="Active Suppliers"
           value={String(apiOverview.active_suppliers || 0)}
+          info={{
+            formula: 'Count of distinct suppliers with at least one purchase line in the selected range.',
+            source: 'report_purchases via /procurement/overview/',
+          }}
         />
         <KPICard
           title="Returns"
           value={String(apiOverview.returns_count || 0)}
           subtitle={formatIndianCurrencyAbbreviated(apiOverview.returns_cost || 0)}
+          onClick={() => drillTo(DETAIL, returnsDrillFilters())}
+          info={{
+            formula: 'Count of purchase lines flagged as returns; subtitle = absolute value of the returned line totals.',
+            source: 'report_purchases via /procurement/overview/ (is_return=true)',
+          }}
         />
         <KPICard
           title="Avg Lead Time"
           value={`${apiOverview.avg_lead_time || 0} days`}
+          info={{
+            formula: 'Average of lead_time_days over purchase lines where a lead time is recorded.',
+            source: 'report_purchases via /procurement/overview/',
+          }}
         />
       </div>
 
@@ -229,12 +365,16 @@ export const ProcurementIntelligence = () => {
           <div className="grid grid-cols-2 gap-4 mb-6">
             <ChartCard
               title="Supplier Performance Metrics"
-              onDrillThrough={() => handleDrillThrough('/detail/purchase')}
+              data={filteredSuppliers}
+              columns={SUPPLIER_PERF_COLUMNS}
+              drillTarget={DETAIL}
+              drillFilters={() => translateCrossFilters()}
+              info={{
+                formula: 'Top suppliers by PO value; bars show on-time % and quality %, line shows rating.',
+                source: 'report_purchases via /procurement/supplier-scorecard/ (returns excluded)',
+                notes: 'On-time % and quality % are modeled values (not tracked in source data).',
+              }}
             >
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/purchase')}
-                className="cursor-context-menu"
-              >
               <ResponsiveContainer width="100%" height={300}>
                 <ComposedChart
                   data={filteredSuppliers}
@@ -275,14 +415,19 @@ export const ProcurementIntelligence = () => {
                   />
                 </ComposedChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Purchase Order Distribution">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/purchase')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Purchase Order Distribution"
+              data={poStatus}
+              columns={PO_STATUS_COLUMNS}
+              drillTarget={DETAIL}
+              drillFilters={() => translateCrossFilters()}
+              info={{
+                formula: 'Distinct purchase orders grouped by PO state; slice size = share of order count. Click a slice to filter, then drill to see that state\'s lines.',
+                source: 'report_purchases via /procurement/po-status/ (returns excluded)',
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie
@@ -316,7 +461,6 @@ export const ProcurementIntelligence = () => {
                   <Tooltip />
                 </PieChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -346,6 +490,12 @@ export const ProcurementIntelligence = () => {
                           value: supplier.supplier,
                         });
                       }}
+                      onContextMenu={(e) => openContextMenu(
+                        e,
+                        DETAIL,
+                        withActive([{ id: 'supplier_name', label: `Supplier: ${supplier.supplier}`, value: String(supplier.supplier) }]),
+                        supplier,
+                      )}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('supplier') && isFiltered('supplier', supplier.supplier) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{supplier.supplier}</td>
@@ -385,11 +535,14 @@ export const ProcurementIntelligence = () => {
       {activeTab === 'price' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Average Price Trend">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/purchase')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Average Price Trend"
+              data={filteredPriceTrend}
+              columns={PRICE_TREND_COLUMNS}
+              drillTarget={DETAIL}
+              drillFilters={() => translateCrossFilters()}
+              info={PRICE_TREND_INFO}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <LineChart
                   data={filteredPriceTrend}
@@ -435,14 +588,20 @@ export const ProcurementIntelligence = () => {
                   />
                 </LineChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Price Index">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/purchase')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Price Index"
+              data={filteredPriceTrend}
+              columns={PRICE_TREND_COLUMNS}
+              drillTarget={DETAIL}
+              drillFilters={() => translateCrossFilters()}
+              info={{
+                formula: 'Monthly purchase price index (base 100); bars turn amber above 102 and red above 104.',
+                source: 'report_purchases via /procurement/price-trend/ (returns excluded)',
+                notes: PRICE_TREND_INFO.notes,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={filteredPriceTrend}
@@ -462,7 +621,6 @@ export const ProcurementIntelligence = () => {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -490,6 +648,15 @@ export const ProcurementIntelligence = () => {
                           label: `Month: ${item.month}`,
                           value: item.month,
                         });
+                      }}
+                      onContextMenu={(e) => {
+                        const raw = monthOf(item);
+                        openContextMenu(
+                          e,
+                          DETAIL,
+                          withActive(raw ? [{ id: 'month', label: `Month: ${item.month}`, value: raw }] : []),
+                          item,
+                        );
                       }}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('month') && isFiltered('month', item.month) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
@@ -541,11 +708,17 @@ export const ProcurementIntelligence = () => {
       {activeTab === 'leadtime' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Lead Time by Supplier">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/purchase')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Lead Time by Supplier"
+              data={leadTimeData}
+              columns={LEAD_TIME_COLUMNS}
+              drillTarget={DETAIL}
+              drillFilters={() => translateCrossFilters()}
+              info={{
+                formula: 'Min / average / max of lead_time_days (receipt date − order date) per supplier.',
+                source: 'report_purchases via /procurement/lead-time/ (lines with a recorded lead time; returns excluded)',
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={leadTimeData}
@@ -564,14 +737,19 @@ export const ProcurementIntelligence = () => {
                   <Bar dataKey="max" fill="#EF4444" name="Max" />
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Average Lead Time Comparison">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/purchase')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Average Lead Time Comparison"
+              data={leadTimeData}
+              columns={LEAD_TIME_COLUMNS}
+              drillTarget={DETAIL}
+              drillFilters={() => translateCrossFilters()}
+              info={{
+                formula: 'Average lead_time_days per supplier; green < 3.5 days, amber < 4.5 days, red ≥ 4.5 days.',
+                source: 'report_purchases via /procurement/lead-time/ (lines with a recorded lead time; returns excluded)',
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={leadTimeData}
@@ -592,7 +770,6 @@ export const ProcurementIntelligence = () => {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -620,6 +797,15 @@ export const ProcurementIntelligence = () => {
                           label: `Supplier: ${supplier.supplier}`,
                           value: supplier.supplier,
                         });
+                      }}
+                      onContextMenu={(e) => {
+                        const name = String(supplier.supplier_name ?? supplier.supplier ?? '');
+                        openContextMenu(
+                          e,
+                          DETAIL,
+                          withActive(name ? [{ id: 'supplier_name', label: `Supplier: ${name}`, value: name }] : []),
+                          supplier,
+                        );
                       }}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('supplier') && isFiltered('supplier', supplier.supplier) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
@@ -661,11 +847,17 @@ export const ProcurementIntelligence = () => {
       {activeTab === 'returns' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Returns by Category">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/purchase')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Returns by Category"
+              data={purchaseReturns}
+              columns={RETURNS_COLUMNS}
+              drillTarget={DETAIL}
+              drillFilters={returnsDrillFilters}
+              info={{
+                formula: 'Purchase-return lines grouped by product category; value = Σ returned line totals, quantity = Σ returned units.',
+                source: 'report_purchases via /procurement/returns/ (is_return=true)',
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={purchaseReturns}
@@ -694,14 +886,19 @@ export const ProcurementIntelligence = () => {
                   <Bar yAxisId="right" dataKey="qty" fill="#F59E0B" name="Quantity" />
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Return Rate Distribution">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/purchase')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Return Rate Distribution"
+              data={purchaseReturns}
+              columns={RETURNS_COLUMNS}
+              drillTarget={DETAIL}
+              drillFilters={returnsDrillFilters}
+              info={{
+                formula: 'Share of purchase-return value by product category (% of total returned value).',
+                source: 'report_purchases via /procurement/returns/ (is_return=true)',
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie
@@ -735,7 +932,6 @@ export const ProcurementIntelligence = () => {
                   <Tooltip />
                 </PieChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -763,6 +959,18 @@ export const ProcurementIntelligence = () => {
                           value: item.category,
                         });
                       }}
+                      onContextMenu={(e) => {
+                        const cat = String(item.product_category ?? item.category ?? '');
+                        openContextMenu(
+                          e,
+                          DETAIL,
+                          withActive([
+                            ...(cat ? [{ id: 'category', label: `Category: ${cat}`, value: cat }] : []),
+                            { id: 'is_return', label: 'Purchase returns', value: 'true' },
+                          ]),
+                          item,
+                        );
+                      }}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('returnCategory') && isFiltered('returnCategory', item.category) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
@@ -777,7 +985,10 @@ export const ProcurementIntelligence = () => {
                       </td>
                     </tr>
                   ))}
-                  <tr className="border-t-2 border-gray-300 font-semibold">
+                  <tr
+                    className="border-t-2 border-gray-300 font-semibold"
+                    onContextMenu={(e) => openContextMenu(e, DETAIL, returnsDrillFilters())}
+                  >
                     <td className="py-2 px-2 text-gray-900">Total</td>
                     <td className="py-2 px-2 text-right text-gray-900">
                       {purchaseReturns.reduce((sum, item) => sum + item.qty, 0).toLocaleString('en-IN')}
@@ -802,11 +1013,18 @@ export const ProcurementIntelligence = () => {
       {activeTab === 'savings' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Savings by Month">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/purchase')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Savings by Month"
+              data={savingsData}
+              columns={SAVINGS_COLUMNS}
+              drillTarget={DETAIL}
+              drillFilters={() => translateCrossFilters()}
+              info={{
+                formula: 'Modeled savings per month = monthly purchase spend × 2% (target = spend × 2.5%).',
+                source: 'report_purchases via /procurement/savings/, grouped by purchase_month',
+                notes: '2% cost-avoidance model — source has no savings tracking.',
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={savingsData}
@@ -826,14 +1044,16 @@ export const ProcurementIntelligence = () => {
                   <Bar dataKey="total" fill="#EF4444" name="Total Savings" />
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Supplier Cost Comparison">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/purchase')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Supplier Cost Comparison"
+              data={supplierCostComparison}
+              columns={COST_COMPARISON_COLUMNS}
+              drillTarget={DETAIL}
+              drillFilters={() => translateCrossFilters()}
+              info={COST_COMPARISON_INFO}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={supplierCostComparison}
@@ -852,7 +1072,6 @@ export const ProcurementIntelligence = () => {
                   <Bar dataKey="worstPrice" fill="#F59E0B" name="Worst Price" />
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -881,6 +1100,15 @@ export const ProcurementIntelligence = () => {
                           value: item.month,
                         });
                       }}
+                      onContextMenu={(e) => {
+                        const raw = monthOf(item);
+                        openContextMenu(
+                          e,
+                          DETAIL,
+                          withActive(raw ? [{ id: 'month', label: `Month: ${raw}`, value: raw }] : []),
+                          item,
+                        );
+                      }}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('month') && isFiltered('month', item.month) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
@@ -901,11 +1129,18 @@ export const ProcurementIntelligence = () => {
       {activeTab === 'payment' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Payment Terms Analysis">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/purchase')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Payment Terms Analysis"
+              data={paymentTermsData}
+              columns={PAYMENT_TERMS_COLUMNS}
+              drillTarget={DETAIL}
+              drillFilters={() => translateCrossFilters()}
+              info={{
+                formula: 'Per-supplier credit days from the supplier master, compared with payment behaviour and on-time payment %.',
+                source: 'supplier terms on report_purchases via /procurement/payment-terms/ (returns excluded)',
+                notes: 'Avg pay days, early-pay discount and on-time payment % are derived placeholders — payment behaviour is not tracked in source data.',
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={paymentTermsData}
@@ -925,14 +1160,16 @@ export const ProcurementIntelligence = () => {
                   <Bar dataKey="onTimePercent" fill="#EF4444" name="On-Time Payment (%)" />
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Supplier Cost Comparison">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/purchase')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Supplier Cost Comparison"
+              data={supplierCostComparison}
+              columns={COST_COMPARISON_COLUMNS}
+              drillTarget={DETAIL}
+              drillFilters={() => translateCrossFilters()}
+              info={COST_COMPARISON_INFO}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={supplierCostComparison}
@@ -951,7 +1188,6 @@ export const ProcurementIntelligence = () => {
                   <Bar dataKey="worstPrice" fill="#F59E0B" name="Worst Price" />
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -980,6 +1216,12 @@ export const ProcurementIntelligence = () => {
                           value: item.supplier,
                         });
                       }}
+                      onContextMenu={(e) => openContextMenu(
+                        e,
+                        DETAIL,
+                        withActive([{ id: 'supplier_name', label: `Supplier: ${item.supplier}`, value: String(item.supplier) }]),
+                        item,
+                      )}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('supplier') && isFiltered('supplier', item.supplier) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.supplier}</td>
@@ -996,19 +1238,8 @@ export const ProcurementIntelligence = () => {
         </>
       )}
 
-      {/* Context Menu */}
-      {contextMenu.visible && (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={closeContextMenu}
-          drillThroughTarget={contextMenu.page}
-          drillThroughContext={{
-            from: 'Procurement Intelligence',
-            filters: activeFilters,
-          }}
-        />
-      )}
+      {contextMenuElement}
     </div>
+    </DrillSource>
   );
 };

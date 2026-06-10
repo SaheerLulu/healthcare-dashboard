@@ -1,8 +1,9 @@
-import { useState, MouseEvent } from 'react';
-import { useNavigate } from 'react-router';
+import { useState } from 'react';
 import { KPICard } from '../components/KPICard';
 import { ChartCard } from '../components/ChartCard';
-import { ContextMenu } from '../components/ContextMenu';
+import { DrillSource } from '../contexts/DrillSourceContext';
+import { useDrillThrough } from '../hooks/useDrillThrough';
+import { DrillFilter, monthOf } from '../utils/drill';
 import { useCrossFilter } from '../contexts/CrossFilterContext';
 import {
   BarChart,
@@ -21,7 +22,6 @@ import {
   Cell,
   PieChart,
   Pie,
-  AreaChart,
   Area,
   ComposedChart,
   RadarChart,
@@ -30,10 +30,10 @@ import {
   PolarAngleAxis,
   PolarRadiusAxis,
 } from 'recharts';
-import { Package, AlertTriangle, TrendingUp, DollarSign, BarChart3, Activity, Zap, Target } from 'lucide-react';
+import { Package, AlertTriangle, TrendingUp, DollarSign, Activity, Zap, Target } from 'lucide-react';
 import { useApiData } from '../hooks/useApiData';
 import { toInventoryCategory, numericize } from '../services/transforms';
-import { formatIndianCurrencyAbbreviated, formatIndianNumber } from '../utils/formatters';
+import { formatIndianCurrencyAbbreviated } from '../utils/formatters';
 
 const COLORS = {
   critical: '#EF4444',
@@ -42,21 +42,59 @@ const COLORS = {
   safe: '#10B981',
 };
 
+const INVENTORY_DETAIL = '/detail/inventory';
+
+// ---- Provenance honesty notes (shared) ----
+const SNAPSHOT_NOTE = 'Snapshot as of latest pipeline run — inventory endpoints ignore the date slider.';
+const COGS_NOTE = 'Profit/margin uses COGS estimated as unit_price × 0.7 when the purchase rate is missing in source (pipeline estimate).';
+const CARRYING_NOTE = 'Carrying cost is a 25%/yr model: storage 7%, insurance 2%, obsolescence 10%, financing 6% — not measured cost.';
+const FILL_RATE_NOTE = 'Fill rate is a fixed 95% placeholder, not a measured service level.';
+
+// ---- Cross-filter → drill-filter translation (design doc §1) ----
+const EXPIRY_BUCKET_OF: Record<string, string> = {
+  'expired': 'expired',
+  '0-30 days': 'd0_30',
+  '0-30d': 'd0_30',
+  '31-60 days': 'd31_60',
+  '61-90 days': 'd61_90',
+  '>90 days': 'd90_plus',
+  '90+ days': 'd90_plus',
+};
+const expiryBucketOf = (range: string): string | undefined =>
+  EXPIRY_BUCKET_OF[(range || '').trim().toLowerCase()];
+
+const MOVEMENT_OF_SEGMENT: Record<string, string> = {
+  'fast movers (a)': 'fast',
+  'fast movers': 'fast',
+  'fast': 'fast',
+  'medium movers (b)': 'medium',
+  'medium movers': 'medium',
+  'medium': 'medium',
+  'slow movers (c)': 'slow',
+  'slow movers': 'slow',
+  'slow': 'slow',
+  'dead stock': 'dead',
+  'dead': 'dead',
+};
+const movementOfSegment = (segment: string): string | undefined =>
+  MOVEMENT_OF_SEGMENT[(segment || '').trim().toLowerCase()];
+
+/** 'A-V' style classification → abc_class + ved_class filter pair. */
+const abcVedFilters = (classification: string): DrillFilter[] => {
+  const m = /^([ABC])\s*-\s*([VED])$/.exec((classification || '').trim().toUpperCase());
+  if (!m) return [];
+  return [
+    { id: 'abc_class', label: `ABC: ${m[1]}`, value: m[1] },
+    { id: 'ved_class', label: `VED: ${m[2]}`, value: m[2] },
+  ];
+};
+
+const inr = (v: any) => formatIndianCurrencyAbbreviated(Number(v) || 0);
+
 export const InventoryOperations = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'expiry' | 'movement' | 'abc' | 'deadstock' | 'optimization' | 'forecast' | 'efficiency' | 'batch' | 'investment'>('overview');
-  const navigate = useNavigate();
   const { toggleCrossFilter, activeFilters, isFiltered } = useCrossFilter();
-  const [contextMenu, setContextMenu] = useState<{
-    visible: boolean;
-    x: number;
-    y: number;
-    page: string;
-  }>({
-    visible: false,
-    x: 0,
-    y: 0,
-    page: '',
-  });
+  const { drillTo, openContextMenu, contextMenuElement } = useDrillThrough();
 
   // API integration
   const { data: apiOverview } = useApiData<any>('/inventory/overview/', {});
@@ -117,9 +155,10 @@ export const InventoryOperations = () => {
     lastSale: r.lastSale || r.last_sale || '',
   }));
 
-  // Carrying cost from API
+  // Carrying cost from API (keep raw `period` for month drill filters)
   const carryingCostItems = apiCarryingCost.map((r: any) => numericize({
     month: r.month || '',
+    period: r.period || '',
     storageCost: Number(r.storageCost || r.storage_cost) || 0,
     insuranceCost: Number(r.insuranceCost || r.insurance_cost) || 0,
     obsolescenceCost: Number(r.obsolescenceCost || r.obsolescence_cost) || 0,
@@ -169,11 +208,58 @@ export const InventoryOperations = () => {
   const nearExpiryItems = Number(apiOverview.near_expiry_items) || 0;
   const inventoryTurnover = Number(apiOverview.inventory_turnover || apiOverview.turnover) || 0;
   const avgDsi = Number(apiOverview.avg_dsi || apiOverview.dsi) || 0;
-  const carryingCostMonthly = Number(apiOverview.carrying_cost_monthly || apiOverview.carrying_cost) || 0;
-  const writeOffsThisMonth = Number(apiOverview.write_offs || apiOverview.writeoffs_this_month) || 0;
-  const stockoutLostSales = Number(apiOverview.stockout_lost_sales || apiOverview.lost_sales) || 0;
   const deadStockValue = Number(apiOverview.dead_stock_value) || 0;
   const optimizationPotential = Number(apiOverview.optimization_potential) || 0;
+
+  // ---- Drill plumbing ----
+  // Month-label → raw 'YYYY-MM' lookup, rebuilt page-locally from the API rows
+  // (charts render 'Mon YY' labels but drill filters must carry the raw month).
+  const monthLabelToRaw: Record<string, string> = {};
+  for (const rows of [movementTrendData, carryingCostItems, turnoverTrend, fifoComplianceData, roiTrend, demandForecast, seasonalDemandIndex]) {
+    for (const r of rows as any[]) {
+      const raw = monthOf(r);
+      if (raw && r.month) monthLabelToRaw[String(r.month)] = raw;
+    }
+  }
+  const rawMonth = (label: string): string | undefined =>
+    /^\d{4}-\d{2}/.test(label || '') ? String(label).slice(0, 7) : monthLabelToRaw[label];
+
+  /** Translate a page cross-filter into backend drill params (design doc §1). */
+  const translateCrossFilter = (f: { id: string; label: string; value: string | string[] }): DrillFilter[] => {
+    const value = Array.isArray(f.value) ? f.value.join(',') : String(f.value);
+    switch (f.id) {
+      case 'product': return [{ id: 'product_name', label: f.label, value }];
+      case 'supplier': return [{ id: 'supplier_name', label: f.label, value }];
+      case 'category': return [{ id: 'category', label: f.label, value }];
+      case 'batch': return [{ id: 'batch_no', label: f.label, value }];
+      case 'month': {
+        const raw = rawMonth(value);
+        return raw ? [{ id: 'month', label: f.label, value: raw }] : [];
+      }
+      case 'range':
+      case 'expiryRange':
+      case 'ageRange': {
+        const bucket = expiryBucketOf(value);
+        return bucket ? [{ id: 'expiry_bucket', label: f.label, value: bucket }] : [];
+      }
+      case 'classification': return abcVedFilters(value);
+      case 'segment':
+      case 'velocity': {
+        const status = movementOfSegment(value);
+        return status ? [{ id: 'movement_status', label: f.label, value: status }] : [];
+      }
+      default: return [];
+    }
+  };
+
+  /** Static drill filters + the page's active cross-filters (translated). */
+  const withActive = (statics: DrillFilter[] = []): DrillFilter[] => {
+    const out = [...statics];
+    for (const f of activeFilters.flatMap(translateCrossFilter)) {
+      if (!out.some(o => o.id === f.id)) out.push(f);
+    }
+    return out;
+  };
 
   const tabs = [
     { id: 'overview', label: 'Stock Overview' },
@@ -198,31 +284,6 @@ export const InventoryOperations = () => {
 
   const hasFilter = (dimension: string) => activeFilters.some(f => f.id === dimension);
 
-  const handleChartRightClick = (e: MouseEvent, page: string) => {
-    e.preventDefault();
-    setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      page,
-    });
-  };
-
-  const closeContextMenu = () => {
-    setContextMenu(prev => ({ ...prev, visible: false }));
-  };
-
-  const handleDrillThrough = (page: string, filter?: any) => {
-    navigate(page, {
-      state: {
-        drillThrough: {
-          from: 'Inventory Operations',
-          filters: activeFilters.length > 0 ? activeFilters : filter ? [filter] : [],
-        },
-      },
-    });
-  };
-
   // Apply cross-filtering
   const filteredStockData = stockByCategoryData.filter(item =>
     !activeFilters.length || activeFilters.some(f => f.value === item.category)
@@ -233,6 +294,7 @@ export const InventoryOperations = () => {
   );
 
   return (
+    <DrillSource name="Inventory Operations">
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Inventory Operations</h1>
@@ -253,34 +315,62 @@ export const InventoryOperations = () => {
           value={formatIndianCurrencyAbbreviated(totalStockValue)}
           subtitle={`${totalItems.toLocaleString('en-IN')} Items`}
           trend={{ value: '', direction: 'up' }}
-          onClick={() => handleDrillThrough('/detail/inventory')}
+          onClick={() => drillTo(INVENTORY_DETAIL, withActive())}
           icon={<Package className="w-5 h-5 text-teal-600" />}
+          info={{
+            formula: 'Σ qty on hand × purchase rate across all stock rows.',
+            source: '/inventory/overview/ — report_inventory snapshot',
+            notes: SNAPSHOT_NOTE,
+          }}
         />
         <KPICard
           title="Fast Moving Items"
           value={String(fastMovingItems)}
           subtitle={totalItems ? `${((fastMovingItems / totalItems) * 100).toFixed(1)}% of total` : ''}
           trend={{ value: '', direction: 'up' }}
+          onClick={() => drillTo(INVENTORY_DETAIL, withActive([{ id: 'movement_status', label: 'Movement: Fast', value: 'fast' }]))}
           icon={<TrendingUp className="w-5 h-5 text-green-600" />}
+          info={{
+            formula: 'Count of SKUs with movement_status = fast.',
+            source: '/inventory/overview/ — report_inventory snapshot',
+            notes: SNAPSHOT_NOTE,
+          }}
         />
         <KPICard
           title="Stock Out Alerts"
           value={String(stockOutAlerts)}
           subtitle="Requires immediate action"
           trend={{ value: '', direction: 'down' }}
+          onClick={() => drillTo(INVENTORY_DETAIL, withActive([{ id: 'reorder_needed', label: 'Reorder needed', value: 'true' }]))}
           icon={<AlertTriangle className="w-5 h-5 text-red-600" />}
+          info={{
+            formula: 'SKUs at zero stock or flagged reorder_needed (at/below reorder level).',
+            source: '/inventory/overview/ — report_inventory snapshot',
+            notes: SNAPSHOT_NOTE,
+          }}
         />
         <KPICard
           title="Near Expiry"
           value={formatIndianCurrencyAbbreviated(nearExpiryValue)}
           subtitle={`${nearExpiryItems} items (0-90 days)`}
           trend={{ value: '', direction: 'down' }}
+          onClick={() => drillTo(INVENTORY_DETAIL, withActive([{ id: 'expiry_status', label: 'Expiry: ≤30 days', value: 'critical_30' }]))}
+          info={{
+            formula: 'Stock value and item count of batches expiring within 90 days.',
+            source: '/inventory/overview/ — report_inventory snapshot',
+            notes: `${SNAPSHOT_NOTE} Drill opens the most urgent (≤30 days) rows.`,
+          }}
         />
         <KPICard
           title="Inventory Turnover"
           value={inventoryTurnover ? `${Number(inventoryTurnover).toFixed(2)}x` : '--'}
           subtitle={avgDsi ? `Avg: ${Math.round(Number(avgDsi))} days` : ''}
           trend={{ value: '', direction: 'up' }}
+          info={{
+            formula: 'Annualized COGS ÷ current stock value; DSI = 365 ÷ turnover.',
+            source: '/inventory/overview/ — snapshot + report_sales',
+            notes: `${SNAPSHOT_NOTE} ${COGS_NOTE}`,
+          }}
         />
       </div>
 
@@ -307,12 +397,21 @@ export const InventoryOperations = () => {
           <div className="grid grid-cols-2 gap-4 mb-6">
             <ChartCard
               title="Stock Value by Category"
-              onDrillThrough={() => handleDrillThrough('/detail/inventory')}
+              data={filteredStockData}
+              columns={[
+                { key: 'category', label: 'Category' },
+                { key: 'value', label: 'Stock Value', format: inr },
+                { key: 'qty', label: 'Quantity' },
+                { key: 'fastMoving', label: 'Fast Moving %' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Σ stock value (qty × purchase rate) and fast-moving share per product category.',
+                source: '/inventory/by-category/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }}
             >
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')}
-                className="cursor-context-menu"
-              >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={filteredStockData}
@@ -353,14 +452,24 @@ export const InventoryOperations = () => {
                   />
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Stock Quantity by Category">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Stock Quantity by Category"
+              data={filteredStockData}
+              columns={[
+                { key: 'category', label: 'Category' },
+                { key: 'qty', label: 'Quantity' },
+                { key: 'value', label: 'Stock Value', format: inr },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Σ qty on hand per product category (share of total quantity).',
+                source: '/inventory/by-category/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie
@@ -394,7 +503,6 @@ export const InventoryOperations = () => {
                   <Tooltip formatter={(value: any) => value.toLocaleString('en-IN')} />
                 </PieChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -423,6 +531,9 @@ export const InventoryOperations = () => {
                           value: alert.product,
                         });
                       }}
+                      onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive([
+                        { id: 'product_name', label: `Product: ${alert.product}`, value: alert.product },
+                      ]), alert)}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('product') && isFiltered('product', alert.product) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{alert.product}</td>
@@ -463,11 +574,23 @@ export const InventoryOperations = () => {
       {activeTab === 'expiry' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Expiry Distribution">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Expiry Distribution"
+              data={expiryData}
+              columns={[
+                { key: 'range', label: 'Expiry Range' },
+                { key: 'qty', label: 'Quantity' },
+                { key: 'value', label: 'Value', format: inr },
+                { key: 'status', label: 'Priority' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Stock value bucketed by days-to-expiry: Expired / 0-30 / 31-60 / 61-90 / >90 days.',
+                source: '/inventory/expiry/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={expiryData}
@@ -487,14 +610,24 @@ export const InventoryOperations = () => {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Quantity Near Expiry">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Quantity Near Expiry"
+              data={expiryData}
+              columns={[
+                { key: 'range', label: 'Expiry Range' },
+                { key: 'qty', label: 'Quantity' },
+                { key: 'value', label: 'Value', format: inr },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Qty on hand per days-to-expiry bucket.',
+                source: '/inventory/expiry/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie
@@ -528,7 +661,6 @@ export const InventoryOperations = () => {
                   <Tooltip />
                 </PieChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -546,7 +678,9 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {expiryData.map((item, idx) => (
+                  {expiryData.map((item, idx) => {
+                    const bucket = expiryBucketOf(item.range);
+                    return (
                     <tr
                       key={`${idx}-${item.range}`}
                       onClick={() => {
@@ -556,6 +690,9 @@ export const InventoryOperations = () => {
                           value: item.range,
                         });
                       }}
+                      onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive(
+                        bucket ? [{ id: 'expiry_bucket', label: `Expiry: ${item.range}`, value: bucket }] : [],
+                      ), item)}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('expiryRange') && isFiltered('expiryRange', item.range) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.range}</td>
@@ -588,7 +725,8 @@ export const InventoryOperations = () => {
                         )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -600,11 +738,23 @@ export const InventoryOperations = () => {
       {activeTab === 'movement' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Stock Movement Trend">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Stock Movement Trend"
+              data={filteredMovementData}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'inbound', label: 'Inbound Qty' },
+                { key: 'outbound', label: 'Outbound Qty' },
+                { key: 'closing', label: 'Closing Stock' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Inbound = purchased qty per month; outbound = sold qty per month.',
+                source: '/inventory/movement-trend/ — report_purchases + report_sales',
+                notes: 'Closing stock is derived backwards from the current snapshot total, not a recorded month-end count.',
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <LineChart
                   data={filteredMovementData}
@@ -633,14 +783,23 @@ export const InventoryOperations = () => {
                   />
                 </LineChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Closing Stock Trend">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Closing Stock Trend"
+              data={filteredMovementData}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'closing', label: 'Closing Stock' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Month-end stock qty = current snapshot total walked backwards by monthly inbound − outbound.',
+                source: '/inventory/movement-trend/ — snapshot + purchase/sales flows',
+                notes: 'Derived series — historical month-ends are reconstructed, not recorded.',
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <LineChart
                   data={filteredMovementData}
@@ -661,7 +820,6 @@ export const InventoryOperations = () => {
                   />
                 </LineChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -680,7 +838,9 @@ export const InventoryOperations = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {movementTrendData.map((item, idx) => (
+                  {movementTrendData.map((item, idx) => {
+                    const raw = monthOf(item);
+                    return (
                     <tr
                       key={`${idx}-${item.month}`}
                       onClick={() => {
@@ -690,6 +850,9 @@ export const InventoryOperations = () => {
                           value: item.month,
                         });
                       }}
+                      onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive(
+                        raw ? [{ id: 'month', label: `Month: ${item.month}`, value: raw }] : [],
+                      ), item)}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('month') && isFiltered('month', item.month) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
@@ -707,7 +870,8 @@ export const InventoryOperations = () => {
                         {Number(item.closing).toLocaleString('en-IN')}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -719,11 +883,23 @@ export const InventoryOperations = () => {
       {activeTab === 'abc' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="ABC-VED Classification">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="ABC-VED Classification"
+              data={abcVedMatrix}
+              columns={[
+                { key: 'classification', label: 'Classification' },
+                { key: 'items', label: 'Items' },
+                { key: 'value', label: 'Value', format: inr },
+                { key: 'status', label: 'Priority' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Stock value per ABC (revenue rank) × VED (criticality) cell.',
+                source: '/inventory/abc-ved/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={abcVedMatrix}
@@ -752,14 +928,24 @@ export const InventoryOperations = () => {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Items by Classification">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Items by Classification"
+              data={abcVedMatrix}
+              columns={[
+                { key: 'classification', label: 'Classification' },
+                { key: 'items', label: 'Items' },
+                { key: 'value', label: 'Value', format: inr },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Distinct SKU count per ABC-VED cell.',
+                source: '/inventory/abc-ved/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie
@@ -793,7 +979,6 @@ export const InventoryOperations = () => {
                   <Tooltip />
                 </PieChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -821,6 +1006,7 @@ export const InventoryOperations = () => {
                           value: item.classification,
                         });
                       }}
+                      onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive(abcVedFilters(item.classification)), item)}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('classification') && isFiltered('classification', item.classification) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.classification}</td>
@@ -860,11 +1046,25 @@ export const InventoryOperations = () => {
       {activeTab === 'deadstock' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Dead Stock Analysis">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Dead Stock Analysis"
+              data={deadStockItems}
+              columns={[
+                { key: 'product', label: 'Product' },
+                { key: 'qty', label: 'Quantity' },
+                { key: 'value', label: 'Value', format: inr },
+                { key: 'lastSold', label: 'Last Sold' },
+                { key: 'category', label: 'Category' },
+                { key: 'reason', label: 'Reason' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive([{ id: 'movement_status', label: 'Movement: Dead', value: 'dead' }])}
+              info={{
+                formula: 'Stock value of SKUs with movement_status = dead and qty > 0 (top items by value).',
+                source: '/inventory/dead-stock/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={deadStockItems}
@@ -884,14 +1084,27 @@ export const InventoryOperations = () => {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Carrying Cost Breakdown">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Carrying Cost Breakdown"
+              data={carryingCostItems}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'storageCost', label: 'Storage', format: inr },
+                { key: 'insuranceCost', label: 'Insurance', format: inr },
+                { key: 'obsolescenceCost', label: 'Obsolescence', format: inr },
+                { key: 'financingCost', label: 'Financing', format: inr },
+                { key: 'total', label: 'Total', format: inr },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Monthly holding cost = reconstructed month-end stock value × 25% ÷ 12, split into components.',
+                source: '/inventory/carrying-cost/ — snapshot + purchase/sales flows',
+                notes: `${CARRYING_NOTE} Month-end stock values are reconstructed from the latest snapshot.`,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <LineChart
                   data={carryingCostItems}
@@ -944,7 +1157,6 @@ export const InventoryOperations = () => {
                   />
                 </LineChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -974,6 +1186,10 @@ export const InventoryOperations = () => {
                           value: item.product,
                         });
                       }}
+                      onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive([
+                        { id: 'movement_status', label: 'Movement: Dead', value: 'dead' },
+                        { id: 'product_name', label: `Product: ${item.product}`, value: item.product },
+                      ]), item)}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('product') && isFiltered('product', item.product) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.product}</td>
@@ -999,11 +1215,23 @@ export const InventoryOperations = () => {
       {activeTab === 'optimization' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Inventory-to-Sales Ratio">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Inventory-to-Sales Ratio"
+              data={inventorySalesRatio}
+              columns={[
+                { key: 'category', label: 'Category' },
+                { key: 'inventoryValue', label: 'Inventory Value', format: inr },
+                { key: 'monthlySales', label: 'Monthly Sales', format: inr },
+                { key: 'ratio', label: 'Ratio' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Snapshot inventory value vs last-30-day sales per category; ratio = inventory ÷ monthly sales.',
+                source: '/inventory/optimization/ — snapshot + report_sales',
+                notes: SNAPSHOT_NOTE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={inventorySalesRatio}
@@ -1044,14 +1272,27 @@ export const InventoryOperations = () => {
                   />
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Stock Optimization Recommendations">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Stock Optimization Recommendations"
+              data={optimizationRecommendations}
+              columns={[
+                { key: 'action', label: 'Action' },
+                { key: 'category', label: 'Category' },
+                { key: 'currentDays', label: 'Current Days' },
+                { key: 'targetDays', label: 'Target Days' },
+                { key: 'potentialSaving', label: 'Potential Saving', format: inr },
+                { key: 'priority', label: 'Priority' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Reduce/replenish actions where days-of-stock deviates from 30-45 day targets; saving ≈ 30% of excess value.',
+                source: '/inventory/optimization/ — snapshot + report_sales',
+                notes: `Potential savings are a heuristic model, not tracked savings. ${SNAPSHOT_NOTE}`,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={optimizationRecommendations}
@@ -1080,7 +1321,6 @@ export const InventoryOperations = () => {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -1111,6 +1351,9 @@ export const InventoryOperations = () => {
                           value: item.category,
                         });
                       }}
+                      onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive([
+                        { id: 'category', label: `Category: ${item.category}`, value: item.category },
+                      ]), item)}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('category') && isFiltered('category', item.category) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.action}</td>
@@ -1156,83 +1399,150 @@ export const InventoryOperations = () => {
         <>
           {/* Forecast KPIs */}
           <div className="grid grid-cols-5 gap-4 mb-6">
-            <KPICard title="Forecast Accuracy" value={apiForecast.accuracy_pct ? `${apiForecast.accuracy_pct}%` : '--'} subtitle={apiForecast.mape ? `MAPE: ${apiForecast.mape}%` : ''} trend={{ value: '', direction: 'up' }} icon={<Target className="w-5 h-5 text-teal-600" />} />
-            <KPICard title="Next Month Demand" value={apiForecast.next_month_demand ? (Number(apiForecast?.next_month_demand ?? 0)).toLocaleString('en-IN') : '--'} subtitle={apiForecast.next_month_label || ''} trend={{ value: '', direction: 'up' }} icon={<TrendingUp className="w-5 h-5 text-indigo-600" />} />
-            <KPICard title="Seasonal Peak" value={apiForecast.seasonal_peak || '--'} subtitle={apiForecast.seasonal_peak_note || ''} trend={{ value: '', direction: 'up' }} />
-            <KPICard title="Reorder Alerts" value={`${apiForecast.reorder_alerts ?? 0} SKUs`} subtitle={apiForecast.reorder_note || ''} trend={{ value: '', direction: 'up' }} icon={<AlertTriangle className="w-5 h-5 text-amber-600" />} />
-            <KPICard title="Overstock Risk" value={`${apiForecast.overstock_risk ?? 0} SKUs`} subtitle={apiForecast.overstock_note || ''} trend={{ value: '', direction: 'down' }} />
+            <KPICard title="Forecast Accuracy" value={apiForecast.accuracy_pct ? `${apiForecast.accuracy_pct}%` : '--'} subtitle={apiForecast.mape ? `MAPE: ${apiForecast.mape}%` : ''} trend={{ value: '', direction: 'up' }} icon={<Target className="w-5 h-5 text-teal-600" />}
+              info={{
+                formula: '100 − mean MAPE of the 3-month moving-average forecast vs actual sales qty.',
+                source: '/inventory/forecast/ — report_sales',
+                notes: 'Modeled accuracy of an internal moving-average forecast, not an external forecasting system.',
+              }} />
+            <KPICard title="Next Month Demand" value={apiForecast.next_month_demand ? (Number(apiForecast?.next_month_demand ?? 0)).toLocaleString('en-IN') : '--'} subtitle={apiForecast.next_month_label || ''} trend={{ value: '', direction: 'up' }} icon={<TrendingUp className="w-5 h-5 text-indigo-600" />}
+              info={{
+                formula: 'Latest 3-month moving average of monthly sales qty projected forward.',
+                source: '/inventory/forecast/ — report_sales',
+                notes: 'Modeled estimate (moving average), not a committed plan.',
+              }} />
+            <KPICard title="Seasonal Peak" value={apiForecast.seasonal_peak || '--'} subtitle={apiForecast.seasonal_peak_note || ''} trend={{ value: '', direction: 'up' }}
+              info={{
+                formula: 'Month with the highest seasonal index (monthly sales qty ÷ average month × 100).',
+                source: '/inventory/forecast/ — report_sales',
+              }} />
+            <KPICard title="Reorder Alerts" value={`${apiForecast.reorder_alerts ?? 0} SKUs`} subtitle={apiForecast.reorder_note || ''} trend={{ value: '', direction: 'up' }} icon={<AlertTriangle className="w-5 h-5 text-amber-600" />}
+              onClick={() => drillTo(INVENTORY_DETAIL, withActive([{ id: 'reorder_needed', label: 'Reorder needed', value: 'true' }]))}
+              info={{
+                formula: 'Count of SKUs flagged reorder_needed in the inventory snapshot.',
+                source: '/inventory/forecast/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }} />
+            <KPICard title="Overstock Risk" value={`${apiForecast.overstock_risk ?? 0} SKUs`} subtitle={apiForecast.overstock_note || ''} trend={{ value: '', direction: 'down' }}
+              info={{
+                formula: 'Count of SKUs with more than 180 days of stock cover.',
+                source: '/inventory/forecast/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }} />
           </div>
 
           {/* Charts Row 1 */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Demand Forecast vs Actual (with Confidence Band)" onDrillThrough={() => handleDrillThrough('/detail/inventory')}>
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={demandForecast}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip />
-                    <Legend />
-                    <Area type="monotone" dataKey="upper" stackId="band" stroke="none" fill="#0D9488" fillOpacity={0.1} name="Upper Bound" />
-                    <Area type="monotone" dataKey="lower" stackId="band2" stroke="none" fill="#ffffff" fillOpacity={0} name="Lower Bound" />
-                    <Line type="monotone" dataKey="actual" stroke="#0D9488" strokeWidth={3} name="Actual" dot={{ fill: '#0D9488', r: 5 }} connectNulls={false} />
-                    <Line type="monotone" dataKey="forecast" stroke="#4F46E5" strokeWidth={2} strokeDasharray="8 4" name="Forecast" dot={{ fill: '#4F46E5', r: 4 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Demand Forecast vs Actual (with Confidence Band)"
+              data={demandForecast}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'actual', label: 'Actual Qty' },
+                { key: 'forecast', label: 'Forecast Qty' },
+                { key: 'upper', label: 'Upper Bound' },
+                { key: 'lower', label: 'Lower Bound' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Actual monthly sales qty vs 3-month moving-average forecast; band = forecast ±15%.',
+                source: '/inventory/forecast/ — report_sales',
+                notes: 'Forecast and confidence band are modeled (moving average ±15%), not a statistical interval.',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={demandForecast}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis tick={{ fontSize: 12 }} />
+                  <Tooltip />
+                  <Legend />
+                  <Area type="monotone" dataKey="upper" stackId="band" stroke="none" fill="#0D9488" fillOpacity={0.1} name="Upper Bound" />
+                  <Area type="monotone" dataKey="lower" stackId="band2" stroke="none" fill="#ffffff" fillOpacity={0} name="Lower Bound" />
+                  <Line type="monotone" dataKey="actual" stroke="#0D9488" strokeWidth={3} name="Actual" dot={{ fill: '#0D9488', r: 5 }} connectNulls={false} />
+                  <Line type="monotone" dataKey="forecast" stroke="#4F46E5" strokeWidth={2} strokeDasharray="8 4" name="Forecast" dot={{ fill: '#4F46E5', r: 4 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="Seasonal Demand Index (Monthly Pattern)">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={seasonalDemandIndex}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 12 }} domain={[80, 130]} />
-                    <Tooltip content={({ active, payload }) => {
-                      if (active && payload && payload.length) {
-                        const d = payload[0].payload;
-                        return (
-                          <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs">
-                            <p className="font-semibold text-gray-900">{d.month}</p>
-                            <p className="text-gray-600">Index: {d.index} ({d.index > 100 ? 'Above' : 'Below'} avg)</p>
-                            <p className="text-gray-600">Peak Category: {d.peakCategory}</p>
-                          </div>
-                        );
-                      }
-                      return null;
-                    }} />
-                    <Bar dataKey="index" name="Seasonal Index" cursor="pointer">
-                      {seasonalDemandIndex.map((entry: any, index: number) => (
-                        <Cell key={`cell-${index}`} fill={entry.index >= 110 ? '#EF4444' : entry.index >= 100 ? '#F59E0B' : '#0D9488'} />
-                      ))}
-                    </Bar>
-                    <Line type="monotone" dataKey={() => 100} stroke="#9CA3AF" strokeWidth={1} strokeDasharray="4 4" name="Baseline (100)" dot={false} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Seasonal Demand Index (Monthly Pattern)"
+              data={seasonalDemandIndex}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'index', label: 'Seasonal Index' },
+                { key: 'peakCategory', label: 'Peak Category' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Monthly sales qty ÷ average monthly qty × 100 (100 = average month).',
+                source: '/inventory/forecast/ — report_sales',
+                notes: 'Index is computed from the visible history window, not multi-year seasonality.',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={seasonalDemandIndex}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 12 }} domain={[80, 130]} />
+                  <Tooltip content={({ active, payload }) => {
+                    if (active && payload && payload.length) {
+                      const d = payload[0].payload;
+                      return (
+                        <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs">
+                          <p className="font-semibold text-gray-900">{d.month}</p>
+                          <p className="text-gray-600">Index: {d.index} ({d.index > 100 ? 'Above' : 'Below'} avg)</p>
+                          <p className="text-gray-600">Peak Category: {d.peakCategory}</p>
+                        </div>
+                      );
+                    }
+                    return null;
+                  }} />
+                  <Bar dataKey="index" name="Seasonal Index" cursor="pointer">
+                    {seasonalDemandIndex.map((entry: any, index: number) => (
+                      <Cell key={`cell-${index}`} fill={entry.index >= 110 ? '#EF4444' : entry.index >= 100 ? '#F59E0B' : '#0D9488'} />
+                    ))}
+                  </Bar>
+                  <Line type="monotone" dataKey={() => 100} stroke="#9CA3AF" strokeWidth={1} strokeDasharray="4 4" name="Baseline (100)" dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
           </div>
 
           {/* Forecast Accuracy by Category */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Forecast Accuracy by Category">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={forecastAccuracyByCategory} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis type="number" tick={{ fontSize: 12 }} domain={[85, 100]} tickFormatter={(v) => `${v}%`} />
-                    <YAxis type="category" dataKey="category" tick={{ fontSize: 11 }} width={80} />
-                    <Tooltip formatter={(value: any) => `${value}%`} />
-                    <Bar dataKey="accuracy" name="Accuracy %" cursor="pointer">
-                      {forecastAccuracyByCategory.map((entry: any, index: number) => (
-                        <Cell key={`cell-${index}`} fill={entry.accuracy >= 95 ? '#10B981' : entry.accuracy >= 93 ? '#F59E0B' : '#EF4444'} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Forecast Accuracy by Category"
+              data={forecastAccuracyByCategory}
+              columns={[
+                { key: 'category', label: 'Category' },
+                { key: 'accuracy', label: 'Accuracy %' },
+                { key: 'mape', label: 'MAPE %' },
+                { key: 'bias', label: 'Bias %' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Accuracy = 100 − MAPE of the 3-month moving-average forecast vs actual (last 6 months) per category.',
+                source: '/inventory/forecast/ — report_sales',
+                notes: 'Modeled accuracy of the internal moving-average forecast.',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={forecastAccuracyByCategory} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis type="number" tick={{ fontSize: 12 }} domain={[85, 100]} tickFormatter={(v) => `${v}%`} />
+                  <YAxis type="category" dataKey="category" tick={{ fontSize: 11 }} width={80} />
+                  <Tooltip formatter={(value: any) => `${value}%`} />
+                  <Bar dataKey="accuracy" name="Accuracy %" cursor="pointer">
+                    {forecastAccuracyByCategory.map((entry: any, index: number) => (
+                      <Cell key={`cell-${index}`} fill={entry.accuracy >= 95 ? '#10B981' : entry.accuracy >= 93 ? '#F59E0B' : '#EF4444'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </ChartCard>
 
             <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
@@ -1250,7 +1560,10 @@ export const InventoryOperations = () => {
                   <tbody>
                     {forecastAccuracyByCategory.map((item, idx) => (
                       <tr key={`${idx}-${item.category}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                        onClick={() => toggleCrossFilter({ id: 'category', label: `Category: ${item.category}`, value: item.category })}>
+                        onClick={() => toggleCrossFilter({ id: 'category', label: `Category: ${item.category}`, value: item.category })}
+                        onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive([
+                          { id: 'category', label: `Category: ${item.category}`, value: item.category },
+                        ]), item)}>
                         <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
                         <td className="py-2 px-2 text-right"><span className={item.mape <= 5 ? 'text-green-600' : item.mape <= 7 ? 'text-amber-600' : 'text-red-600'}>{item.mape}%</span></td>
                         <td className="py-2 px-2 text-right"><span className={Math.abs(item.bias) <= 1 ? 'text-green-600' : 'text-amber-600'}>{item.bias > 0 ? '+' : ''}{item.bias}%</span></td>
@@ -1291,7 +1604,10 @@ export const InventoryOperations = () => {
                 <tbody>
                   {safetyStockAnalysis.map((item: any, idx: number) => (
                     <tr key={`${idx}-${item.product}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                      onClick={() => toggleCrossFilter({ id: 'product', label: `Product: ${item.product}`, value: item.product })}>
+                      onClick={() => toggleCrossFilter({ id: 'product', label: `Product: ${item.product}`, value: item.product })}
+                      onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive([
+                        { id: 'product_name', label: `Product: ${item.product}`, value: item.product },
+                      ]), item)}>
                       <td className="py-2 px-2 font-medium text-gray-900">{item.product}</td>
                       <td className="py-2 px-2 text-right text-gray-600">{item.avgDemand}</td>
                       <td className="py-2 px-2 text-right text-gray-600">{item.leadTime}</td>
@@ -1327,49 +1643,96 @@ export const InventoryOperations = () => {
         <>
           {/* Efficiency KPIs */}
           <div className="grid grid-cols-5 gap-4 mb-6">
-            <KPICard title="Avg Turnover" value={apiTurnover.avg_turnover ? `${apiTurnover.avg_turnover}x` : '--'} subtitle={apiTurnover.turnover_target ? `Target: ${apiTurnover.turnover_target}x` : ''} trend={{ value: '', direction: 'up' }} icon={<Activity className="w-5 h-5 text-teal-600" />} />
-            <KPICard title="GMROI (Overall)" value={apiTurnover.gmroi ? String(apiTurnover.gmroi) : '--'} subtitle={apiTurnover.gmroi ? `₹${apiTurnover.gmroi} GP per ₹1 invested` : ''} trend={{ value: '', direction: 'up' }} icon={<DollarSign className="w-5 h-5 text-green-600" />} />
-            <KPICard title="Days Sales Inventory" value={apiTurnover.avg_dsi ? `${apiTurnover.avg_dsi} days` : '--'} subtitle={apiTurnover.industry_dsi ? `Industry avg: ${apiTurnover.industry_dsi}` : ''} trend={{ value: '', direction: 'down' }} />
-            <KPICard title="Fill Rate" value={apiTurnover.fill_rate ? `${apiTurnover.fill_rate}%` : '--'} subtitle={apiTurnover.fill_rate_target ? `Target: ${apiTurnover.fill_rate_target}%` : ''} trend={{ value: '', direction: 'up' }} />
-            <KPICard title="Working Capital Excess" value={apiTurnover.working_capital_excess ? formatIndianCurrencyAbbreviated(apiTurnover.working_capital_excess) : '--'} subtitle={apiTurnover.annual_waste ? `${formatIndianCurrencyAbbreviated(apiTurnover.annual_waste)} annual waste` : ''} trend={{ value: '', direction: 'down' }} icon={<Zap className="w-5 h-5 text-amber-600" />} />
+            <KPICard title="Avg Turnover" value={apiTurnover.avg_turnover ? `${apiTurnover.avg_turnover}x` : '--'} subtitle={apiTurnover.turnover_target ? `Target: ${apiTurnover.turnover_target}x` : ''} trend={{ value: '', direction: 'up' }} icon={<Activity className="w-5 h-5 text-teal-600" />}
+              info={{
+                formula: 'Annualized COGS ÷ current stock value.',
+                source: '/inventory/turnover/ — snapshot + report_sales',
+                notes: `${SNAPSHOT_NOTE} ${COGS_NOTE}`,
+              }} />
+            <KPICard title="GMROI (Overall)" value={apiTurnover.gmroi ? String(apiTurnover.gmroi) : '--'} subtitle={apiTurnover.gmroi ? `₹${apiTurnover.gmroi} GP per ₹1 invested` : ''} trend={{ value: '', direction: 'up' }} icon={<DollarSign className="w-5 h-5 text-green-600" />}
+              info={{
+                formula: 'Annualized gross margin ÷ current inventory investment.',
+                source: '/inventory/turnover/ — snapshot + report_sales',
+                notes: `${SNAPSHOT_NOTE} ${COGS_NOTE}`,
+              }} />
+            <KPICard title="Days Sales Inventory" value={apiTurnover.avg_dsi ? `${apiTurnover.avg_dsi} days` : '--'} subtitle={apiTurnover.industry_dsi ? `Industry avg: ${apiTurnover.industry_dsi}` : ''} trend={{ value: '', direction: 'down' }}
+              info={{
+                formula: 'Average days of stock cover (365 ÷ turnover).',
+                source: '/inventory/turnover/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }} />
+            <KPICard title="Fill Rate" value={apiTurnover.fill_rate ? `${apiTurnover.fill_rate}%` : '--'} subtitle={apiTurnover.fill_rate_target ? `Target: ${apiTurnover.fill_rate_target}%` : ''} trend={{ value: '', direction: 'up' }}
+              info={{
+                formula: 'Share of demand served from stock.',
+                source: '/inventory/turnover/',
+                notes: FILL_RATE_NOTE,
+              }} />
+            <KPICard title="Working Capital Excess" value={apiTurnover.working_capital_excess ? formatIndianCurrencyAbbreviated(apiTurnover.working_capital_excess) : '--'} subtitle={apiTurnover.annual_waste ? `${formatIndianCurrencyAbbreviated(apiTurnover.annual_waste)} annual waste` : ''} trend={{ value: '', direction: 'down' }} icon={<Zap className="w-5 h-5 text-amber-600" />}
+              info={{
+                formula: 'Stock value above 45 days of cover.',
+                source: '/inventory/turnover/ — report_inventory snapshot',
+                notes: `Excess threshold (45 days), carrying cost (25%/yr) and waste (70% of dead stock) are model assumptions. ${SNAPSHOT_NOTE}`,
+              }} />
           </div>
 
           {/* Charts Row 1 */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Turnover & GMROI Trend" onDrillThrough={() => handleDrillThrough('/detail/inventory')}>
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={turnoverTrend} onClick={(data) => handleChartSelect(data, 'month')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
-                    <Tooltip />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="turnover" fill="#0D9488" name="Turnover (x)" cursor="pointer" />
-                    <Bar yAxisId="left" dataKey="gmroi" fill="#4F46E5" name="GMROI" cursor="pointer" />
-                    <Line yAxisId="right" type="monotone" dataKey="fillRate" stroke="#F59E0B" strokeWidth={2} name="Fill Rate %" dot={{ fill: '#F59E0B', r: 4 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Turnover & GMROI Trend"
+              data={turnoverTrend}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'turnover', label: 'Turnover (x)' },
+                { key: 'gmroi', label: 'GMROI' },
+                { key: 'fillRate', label: 'Fill Rate %' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Per month: turnover = COGS ÷ stock value × 12; GMROI = gross margin ÷ stock value × 12.',
+                source: '/inventory/turnover/ — snapshot + report_sales',
+                notes: `Stock-value denominator is the current snapshot for all months. ${FILL_RATE_NOTE} ${COGS_NOTE}`,
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={turnoverTrend} onClick={(data) => handleChartSelect(data, 'month')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="turnover" fill="#0D9488" name="Turnover (x)" cursor="pointer" />
+                  <Bar yAxisId="left" dataKey="gmroi" fill="#4F46E5" name="GMROI" cursor="pointer" />
+                  <Line yAxisId="right" type="monotone" dataKey="fillRate" stroke="#F59E0B" strokeWidth={2} name="Fill Rate %" dot={{ fill: '#F59E0B', r: 4 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="Category Efficiency Radar">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <RadarChart data={efficiencyRadar}>
-                    <PolarGrid />
-                    <PolarAngleAxis dataKey="metric" tick={{ fontSize: 10 }} />
-                    <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fontSize: 9 }} />
-                    <Radar name="Tablets" dataKey="Tablets" stroke="#0D9488" fill="#0D9488" fillOpacity={0.15} />
-                    <Radar name="Syrups" dataKey="Syrups" stroke="#4F46E5" fill="#4F46E5" fillOpacity={0.15} />
-                    <Radar name="Ointments" dataKey="Ointments" stroke="#10B981" fill="#10B981" fillOpacity={0.15} />
-                    <Radar name="Injections" dataKey="Injections" stroke="#EF4444" fill="#EF4444" fillOpacity={0.15} />
-                    <Legend />
-                    <Tooltip />
-                  </RadarChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Category Efficiency Radar"
+              data={efficiencyRadar}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Top-4 categories scored 0-100 on turnover, GMROI, fill rate, inverted DSI and stock health.',
+                source: '/inventory/turnover/ — snapshot + report_sales',
+                notes: `${FILL_RATE_NOTE} ${SNAPSHOT_NOTE}`,
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <RadarChart data={efficiencyRadar}>
+                  <PolarGrid />
+                  <PolarAngleAxis dataKey="metric" tick={{ fontSize: 10 }} />
+                  <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fontSize: 9 }} />
+                  <Radar name="Tablets" dataKey="Tablets" stroke="#0D9488" fill="#0D9488" fillOpacity={0.15} />
+                  <Radar name="Syrups" dataKey="Syrups" stroke="#4F46E5" fill="#4F46E5" fillOpacity={0.15} />
+                  <Radar name="Ointments" dataKey="Ointments" stroke="#10B981" fill="#10B981" fillOpacity={0.15} />
+                  <Radar name="Injections" dataKey="Injections" stroke="#EF4444" fill="#EF4444" fillOpacity={0.15} />
+                  <Legend />
+                  <Tooltip />
+                </RadarChart>
+              </ResponsiveContainer>
             </ChartCard>
           </div>
 
@@ -1395,7 +1758,10 @@ export const InventoryOperations = () => {
                     const health = item.gmroi >= 3 ? 'excellent' : item.gmroi >= 2 ? 'good' : item.gmroi >= 1 ? 'fair' : 'poor';
                     return (
                       <tr key={`${idx}-${item.category}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                        onClick={() => toggleCrossFilter({ id: 'category', label: `Category: ${item.category}`, value: item.category })}>
+                        onClick={() => toggleCrossFilter({ id: 'category', label: `Category: ${item.category}`, value: item.category })}
+                        onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive([
+                          { id: 'category', label: `Category: ${item.category}`, value: item.category },
+                        ]), item)}>
                         <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
                         <td className="py-2 px-2 text-right"><span className={item.turnover >= 8 ? 'text-green-600 font-medium' : item.turnover >= 5 ? 'text-amber-600' : 'text-red-600'}>{item.turnover}x</span></td>
                         <td className="py-2 px-2 text-right"><span className={item.dsi <= 45 ? 'text-green-600' : item.dsi <= 90 ? 'text-amber-600' : 'text-red-600 font-medium'}>{item.dsi}</span></td>
@@ -1438,9 +1804,14 @@ export const InventoryOperations = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {velocitySegmentation.map((seg, idx) => (
+                    {velocitySegmentation.map((seg, idx) => {
+                      const status = movementOfSegment(seg.segment);
+                      return (
                       <tr key={`${idx}-${seg.segment}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                        onClick={() => toggleCrossFilter({ id: 'velocity', label: `Velocity: ${seg.segment}`, value: seg.segment })}>
+                        onClick={() => toggleCrossFilter({ id: 'velocity', label: `Velocity: ${seg.segment}`, value: seg.segment })}
+                        onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive(
+                          status ? [{ id: 'movement_status', label: `Velocity: ${seg.segment}`, value: status }] : [],
+                        ), seg)}>
                         <td className="py-2 px-2 font-medium text-gray-900">{seg.segment}</td>
                         <td className="py-2 px-2 text-right text-gray-900">{seg.skus}</td>
                         <td className="py-2 px-2 text-right text-gray-900">₹{(Number(seg.revenue) / 100000).toFixed(2)}L</td>
@@ -1455,7 +1826,8 @@ export const InventoryOperations = () => {
                         <td className="py-2 px-2 text-right"><span className={seg.avgDSI <= 25 ? 'text-green-600' : seg.avgDSI <= 50 ? 'text-amber-600' : 'text-red-600'}>{seg.avgDSI}</span></td>
                         <td className="py-2 px-2 text-right"><span className={seg.gmroi >= 5 ? 'text-green-600 font-medium' : seg.gmroi >= 3 ? 'text-amber-600' : 'text-red-600'}>{Number(seg.gmroi).toFixed(2)}</span></td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1467,8 +1839,15 @@ export const InventoryOperations = () => {
                 {workingCapitalImpact.map((item: any, index: number) => {
                   const isTotal = index === workingCapitalImpact.length - 1;
                   const isNegative = (item.item || '').includes('Excess') || (item.item || '').includes('Cost') || (item.item || '').includes('Waste') || (item.item || '').includes('Opportunity');
+                  const isDead = (item.item || '').includes('Dead');
                   return (
-                    <div key={`${index}-${item.item}`} className={`flex items-center justify-between ${isTotal ? 'border-t-2 border-gray-300 pt-3' : ''}`}>
+                    <div
+                      key={`${index}-${item.item}`}
+                      className={`flex items-center justify-between cursor-context-menu ${isTotal ? 'border-t-2 border-gray-300 pt-3' : ''}`}
+                      onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive(
+                        isDead ? [{ id: 'movement_status', label: 'Movement: Dead', value: 'dead' }] : [],
+                      ), item)}
+                    >
                       <span className={`text-sm ${isTotal ? 'font-bold text-gray-900' : 'text-gray-700'}`}>{item.item}</span>
                       <span className={`text-sm font-medium ${isTotal ? 'text-red-700 font-bold' : isNegative ? 'text-red-600' : 'text-gray-900'}`}>
                         ₹{(Number(item.value) / 100000).toFixed(2)}L
@@ -1487,52 +1866,106 @@ export const InventoryOperations = () => {
         <>
           {/* Batch KPIs */}
           <div className="grid grid-cols-5 gap-4 mb-6">
-            <KPICard title="Active Batches" value={apiBatchDetail.active_batches ? String(apiBatchDetail.active_batches) : '--'} subtitle={apiBatchDetail.total_skus ? `Across ${apiBatchDetail.total_skus} SKUs` : ''} trend={{ value: '', direction: 'up' }} icon={<Package className="w-5 h-5 text-teal-600" />} />
-            <KPICard title="FIFO Compliance" value={apiBatchDetail.fifo_compliance ? `${apiBatchDetail.fifo_compliance}%` : '--'} subtitle={apiBatchDetail.non_compliant_pct ? `${apiBatchDetail.non_compliant_pct}% non-compliant` : ''} trend={{ value: '', direction: 'down' }} />
-            <KPICard title="Waste from Non-FIFO" value={formatIndianCurrencyAbbreviated(apiBatchDetail.waste_from_non_fifo ?? 0)} subtitle="This month" trend={{ value: '', direction: 'down' }} />
-            <KPICard title="Avg Batch Margin" value={apiBatchDetail.avg_batch_margin ? `${apiBatchDetail.avg_batch_margin}%` : '--'} subtitle="Across all lots" trend={{ value: '', direction: 'up' }} />
-            <KPICard title="Supplier Quality" value={apiBatchDetail.supplier_quality_score ? String(apiBatchDetail.supplier_quality_score) : '--'} subtitle="Weighted avg score" trend={{ value: '', direction: 'up' }} />
+            <KPICard title="Active Batches" value={apiBatchDetail.active_batches ? String(apiBatchDetail.active_batches) : '--'} subtitle={apiBatchDetail.total_skus ? `Across ${apiBatchDetail.total_skus} SKUs` : ''} trend={{ value: '', direction: 'up' }} icon={<Package className="w-5 h-5 text-teal-600" />}
+              onClick={() => drillTo(INVENTORY_DETAIL, withActive())}
+              info={{
+                formula: 'Count of snapshot stock rows with a batch number.',
+                source: '/inventory/batch-detail/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }} />
+            <KPICard title="FIFO Compliance" value={apiBatchDetail.fifo_compliance ? `${apiBatchDetail.fifo_compliance}%` : '--'} subtitle={apiBatchDetail.non_compliant_pct ? `${apiBatchDetail.non_compliant_pct}% non-compliant` : ''} trend={{ value: '', direction: 'down' }}
+              info={{
+                formula: '100 − (expired stock value ÷ monthly purchases), averaged over 6 months.',
+                source: '/inventory/batch-detail/ — snapshot + report_purchases',
+                notes: 'Approximated from expired-stock value vs purchases — pick order is not actually tracked.',
+              }} />
+            <KPICard title="Waste from Non-FIFO" value={formatIndianCurrencyAbbreviated(apiBatchDetail.waste_from_non_fifo ?? 0)} subtitle="This month" trend={{ value: '', direction: 'down' }}
+              info={{
+                formula: 'Σ stock value of batches marked expired (last 6 months).',
+                source: '/inventory/batch-detail/ — report_inventory snapshot',
+                notes: `Attribution to FIFO breaches is an approximation. ${SNAPSHOT_NOTE}`,
+              }} />
+            <KPICard title="Avg Batch Margin" value={apiBatchDetail.avg_batch_margin ? `${apiBatchDetail.avg_batch_margin}%` : '--'} subtitle="Across all lots" trend={{ value: '', direction: 'up' }}
+              info={{
+                formula: '(MRP − purchase rate) ÷ MRP averaged across batches.',
+                source: '/inventory/batch-detail/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }} />
+            <KPICard title="Supplier Quality" value={apiBatchDetail.supplier_quality_score ? String(apiBatchDetail.supplier_quality_score) : '--'} subtitle="Weighted avg score" trend={{ value: '', direction: 'up' }}
+              info={{
+                formula: 'Weighted scorecard from supplier lot margins, turnover and return rates.',
+                source: '/inventory/batch-detail/ — report_purchases',
+                notes: 'Modeled score — quality is not directly measured at source.',
+              }} />
           </div>
 
           {/* Charts Row 1 */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Batch Aging Distribution (by Value)" onDrillThrough={() => handleDrillThrough('/detail/inventory')}>
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={batchAgingDistribution} onClick={(data) => handleChartSelect(data, 'ageRange')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="ageRange" tick={{ fontSize: 10 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
-                    <Tooltip formatter={(value: any, name: string) => name === 'Avg Margin %' ? `${value}%` : name === 'Batches' ? value : `₹${(value / 100000).toFixed(2)}L`} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="value" name="Inventory Value" cursor="pointer">
-                      {batchAgingDistribution.map((entry: any, index: number) => (
-                        <Cell key={`cell-${index}`} fill={index < 2 ? '#10B981' : index < 3 ? '#F59E0B' : '#EF4444'} />
-                      ))}
-                    </Bar>
-                    <Line yAxisId="right" type="monotone" dataKey="avgMargin" stroke="#4F46E5" strokeWidth={2} name="Avg Margin %" dot={{ fill: '#4F46E5', r: 4 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Batch Aging Distribution (by Value)"
+              data={batchAgingDistribution}
+              columns={[
+                { key: 'ageRange', label: 'Age Range' },
+                { key: 'value', label: 'Inventory Value', format: inr },
+                { key: 'batches', label: 'Batches' },
+                { key: 'avgMargin', label: 'Avg Margin %' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Batch stock value bucketed by days-to-expiry; margin ≈ (MRP − purchase rate) ÷ MRP.',
+                source: '/inventory/batch-detail/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={batchAgingDistribution} onClick={(data) => handleChartSelect(data, 'ageRange')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="ageRange" tick={{ fontSize: 10 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
+                  <Tooltip formatter={(value: any, name: string) => name === 'Avg Margin %' ? `${value}%` : name === 'Batches' ? value : `₹${(value / 100000).toFixed(2)}L`} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="value" name="Inventory Value" cursor="pointer">
+                    {batchAgingDistribution.map((entry: any, index: number) => (
+                      <Cell key={`cell-${index}`} fill={index < 2 ? '#10B981' : index < 3 ? '#F59E0B' : '#EF4444'} />
+                    ))}
+                  </Bar>
+                  <Line yAxisId="right" type="monotone" dataKey="avgMargin" stroke="#4F46E5" strokeWidth={2} name="Avg Margin %" dot={{ fill: '#4F46E5', r: 4 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="FIFO Compliance Trend">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={fifoComplianceData} onClick={(data) => handleChartSelect(data, 'month')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} domain={[80, 100]} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
-                    <Tooltip formatter={(value: any, name: string) => name === 'Waste Cost' ? `₹${(value / 1000).toFixed(1)}K` : `${value}%`} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="compliant" fill="#10B981" name="FIFO Compliant %" stackId="a" />
-                    <Bar yAxisId="left" dataKey="nonCompliant" fill="#EF4444" name="Non-Compliant %" stackId="a" />
-                    <Line yAxisId="right" type="monotone" dataKey="wasteFromNonFIFO" stroke="#F59E0B" strokeWidth={2} name="Waste Cost" dot={{ fill: '#F59E0B', r: 4 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="FIFO Compliance Trend"
+              data={fifoComplianceData}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'compliant', label: 'FIFO Compliant %' },
+                { key: 'nonCompliant', label: 'Non-Compliant %' },
+                { key: 'wasteFromNonFIFO', label: 'Waste Cost', format: inr },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Non-compliance ≈ expired stock value ÷ monthly purchase value, per month.',
+                source: '/inventory/batch-detail/ — snapshot + report_purchases',
+                notes: `FIFO compliance is approximated — pick order is not measured. ${SNAPSHOT_NOTE}`,
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={fifoComplianceData} onClick={(data) => handleChartSelect(data, 'month')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} domain={[80, 100]} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
+                  <Tooltip formatter={(value: any, name: string) => name === 'Waste Cost' ? `₹${(value / 1000).toFixed(1)}K` : `${value}%`} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="compliant" fill="#10B981" name="FIFO Compliant %" stackId="a" />
+                  <Bar yAxisId="left" dataKey="nonCompliant" fill="#EF4444" name="Non-Compliant %" stackId="a" />
+                  <Line yAxisId="right" type="monotone" dataKey="wasteFromNonFIFO" stroke="#F59E0B" strokeWidth={2} name="Waste Cost" dot={{ fill: '#F59E0B', r: 4 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
           </div>
 
@@ -1558,7 +1991,10 @@ export const InventoryOperations = () => {
                     const rating = score >= 55 ? 'A' : score >= 45 ? 'B' : 'C';
                     return (
                       <tr key={`${idx}-${item.supplier}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                        onClick={() => toggleCrossFilter({ id: 'supplier', label: `Supplier: ${item.supplier}`, value: item.supplier })}>
+                        onClick={() => toggleCrossFilter({ id: 'supplier', label: `Supplier: ${item.supplier}`, value: item.supplier })}
+                        onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive([
+                          { id: 'supplier_name', label: `Supplier: ${item.supplier}`, value: item.supplier },
+                        ]), item)}>
                         <td className="py-2 px-2 font-medium text-gray-900">{item.supplier}</td>
                         <td className="py-2 px-2 text-right text-gray-900">{item.lots}</td>
                         <td className="py-2 px-2 text-right"><span className={item.avgMargin >= 37 ? 'text-green-600 font-medium' : 'text-gray-900'}>{item.avgMargin}%</span></td>
@@ -1608,7 +2044,11 @@ export const InventoryOperations = () => {
                     const sellThrough = batch.qtyReceived ? ((Number(batch.qtySold) / Number(batch.qtyReceived)) * 100).toFixed(1) : '0.0';
                     return (
                       <tr key={`${idx}-${batch.batchNo}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                        onClick={() => toggleCrossFilter({ id: 'batch', label: `Batch: ${batch.batchNo}`, value: batch.batchNo })}>
+                        onClick={() => toggleCrossFilter({ id: 'batch', label: `Batch: ${batch.batchNo}`, value: batch.batchNo })}
+                        onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive([
+                          { id: 'batch_no', label: `Batch: ${batch.batchNo}`, value: batch.batchNo },
+                          { id: 'product_name', label: `Product: ${batch.product}`, value: batch.product },
+                        ]), batch)}>
                         <td className="py-2 px-2 font-mono text-gray-600">{batch.batchNo}</td>
                         <td className="py-2 px-2 font-medium text-gray-900">{batch.product}</td>
                         <td className="py-2 px-2 text-gray-600">{batch.supplier}</td>
@@ -1640,11 +2080,38 @@ export const InventoryOperations = () => {
         <>
           {/* Investment KPIs */}
           <div className="grid grid-cols-5 gap-4 mb-6">
-            <KPICard title="Total Inventory Investment" value={formatIndianCurrencyAbbreviated(totalStockValue)} subtitle="As of today" trend={{ value: '', direction: 'up' }} icon={<DollarSign className="w-5 h-5 text-teal-600" />} />
-            <KPICard title="Monthly ROI" value={apiInvestmentDetail.monthly_roi ? `${apiInvestmentDetail.monthly_roi}%` : '--'} subtitle={apiInvestmentDetail.annualized_roi ? `Annualized: ${apiInvestmentDetail.annualized_roi}%` : ''} trend={{ value: '', direction: 'up' }} icon={<TrendingUp className="w-5 h-5 text-green-600" />} />
-            <KPICard title="GMROI" value={apiInvestmentDetail.gmroi ? `${apiInvestmentDetail.gmroi}x` : '--'} subtitle={apiInvestmentDetail.gmroi ? `Gross margin per ₹1 invested` : ''} trend={{ value: '', direction: 'up' }} />
-            <KPICard title="Payback Period" value={apiInvestmentDetail.payback_days ? `${apiInvestmentDetail.payback_days} days` : '--'} subtitle="Avg across all categories" trend={{ value: '', direction: 'down' }} />
-            <KPICard title="Capital Locked (Dead)" value={formatIndianCurrencyAbbreviated(deadStockValue)} subtitle="No movement 90+ days" trend={{ value: '', direction: 'up' }} icon={<AlertTriangle className="w-5 h-5 text-red-600" />} />
+            <KPICard title="Total Inventory Investment" value={formatIndianCurrencyAbbreviated(totalStockValue)} subtitle="As of today" trend={{ value: '', direction: 'up' }} icon={<DollarSign className="w-5 h-5 text-teal-600" />}
+              onClick={() => drillTo(INVENTORY_DETAIL, withActive())}
+              info={{
+                formula: 'Σ stock value at purchase cost across all stock rows.',
+                source: '/inventory/overview/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }} />
+            <KPICard title="Monthly ROI" value={apiInvestmentDetail.monthly_roi ? `${apiInvestmentDetail.monthly_roi}%` : '--'} subtitle={apiInvestmentDetail.annualized_roi ? `Annualized: ${apiInvestmentDetail.annualized_roi}%` : ''} trend={{ value: '', direction: 'up' }} icon={<TrendingUp className="w-5 h-5 text-green-600" />}
+              info={{
+                formula: 'Last-30-day gross margin ÷ total inventory investment.',
+                source: '/inventory/investment-detail/ — snapshot + report_sales',
+                notes: `${SNAPSHOT_NOTE} ${COGS_NOTE}`,
+              }} />
+            <KPICard title="GMROI" value={apiInvestmentDetail.gmroi ? `${apiInvestmentDetail.gmroi}x` : '--'} subtitle={apiInvestmentDetail.gmroi ? `Gross margin per ₹1 invested` : ''} trend={{ value: '', direction: 'up' }}
+              info={{
+                formula: 'Average gross-margin return on inventory investment across SKUs.',
+                source: '/inventory/investment-detail/ — report_inventory snapshot',
+                notes: `${SNAPSHOT_NOTE} ${COGS_NOTE}`,
+              }} />
+            <KPICard title="Payback Period" value={apiInvestmentDetail.payback_days ? `${apiInvestmentDetail.payback_days} days` : '--'} subtitle="Avg across all categories" trend={{ value: '', direction: 'down' }}
+              info={{
+                formula: 'Total investment ÷ daily profit (last-30-day gross margin ÷ 30).',
+                source: '/inventory/investment-detail/ — snapshot + report_sales',
+                notes: `${SNAPSHOT_NOTE} ${COGS_NOTE}`,
+              }} />
+            <KPICard title="Capital Locked (Dead)" value={formatIndianCurrencyAbbreviated(deadStockValue)} subtitle="No movement 90+ days" trend={{ value: '', direction: 'up' }} icon={<AlertTriangle className="w-5 h-5 text-red-600" />}
+              onClick={() => drillTo(INVENTORY_DETAIL, withActive([{ id: 'movement_status', label: 'Movement: Dead', value: 'dead' }]))}
+              info={{
+                formula: 'Σ stock value of SKUs with movement_status = dead.',
+                source: '/inventory/overview/ — report_inventory snapshot',
+                notes: SNAPSHOT_NOTE,
+              }} />
           </div>
 
           {/* Investment Story Banner */}
@@ -1655,22 +2122,30 @@ export const InventoryOperations = () => {
               <span className="text-xs text-gray-500 ml-auto">How efficiently is your capital working</span>
             </div>
             <div className="grid grid-cols-4 gap-3">
-              <div className="bg-white rounded-lg p-3 border border-green-100">
+              <div className="bg-white rounded-lg p-3 border border-green-100 cursor-context-menu"
+                onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive(
+                  apiInvestmentDetail.best_roi_category ? [{ id: 'category', label: `Category: ${apiInvestmentDetail.best_roi_category}`, value: apiInvestmentDetail.best_roi_category }] : [],
+                ), { metric: 'Best ROI Category', value: apiInvestmentDetail.best_roi_category })}>
                 <div className="text-[10px] text-gray-500 mb-1">Best ROI Category</div>
                 <div className="text-sm font-bold text-green-700">{apiInvestmentDetail.best_roi_category || '--'}</div>
                 <div className="text-[10px] text-green-500">{apiInvestmentDetail.best_roi_note || ''}</div>
               </div>
-              <div className="bg-white rounded-lg p-3 border border-red-100">
+              <div className="bg-white rounded-lg p-3 border border-red-100 cursor-context-menu"
+                onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive(
+                  apiInvestmentDetail.worst_roi_category ? [{ id: 'category', label: `Category: ${apiInvestmentDetail.worst_roi_category}`, value: apiInvestmentDetail.worst_roi_category }] : [],
+                ), { metric: 'Worst ROI Category', value: apiInvestmentDetail.worst_roi_category })}>
                 <div className="text-[10px] text-gray-500 mb-1">Worst ROI Category</div>
                 <div className="text-sm font-bold text-red-700">{apiInvestmentDetail.worst_roi_category || '--'}</div>
                 <div className="text-[10px] text-red-500">{apiInvestmentDetail.worst_roi_note || ''}</div>
               </div>
-              <div className="bg-white rounded-lg p-3 border border-blue-100">
+              <div className="bg-white rounded-lg p-3 border border-blue-100 cursor-context-menu"
+                onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive(), { metric: 'Optimization Potential', value: optimizationPotential })}>
                 <div className="text-[10px] text-gray-500 mb-1">Optimization Potential</div>
                 <div className="text-sm font-bold text-blue-700">{formatIndianCurrencyAbbreviated(optimizationPotential)}</div>
                 <div className="text-[10px] text-blue-500">Excess capital locked</div>
               </div>
-              <div className="bg-white rounded-lg p-3 border border-amber-100">
+              <div className="bg-white rounded-lg p-3 border border-amber-100 cursor-context-menu"
+                onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive(), { metric: 'Annual Opportunity Cost', value: apiInvestmentDetail.annual_opportunity_cost })}>
                 <div className="text-[10px] text-gray-500 mb-1">Annual Opportunity Cost</div>
                 <div className="text-sm font-bold text-amber-700">{apiInvestmentDetail.annual_opportunity_cost ? formatIndianCurrencyAbbreviated(apiInvestmentDetail.annual_opportunity_cost) : '--'}</div>
                 <div className="text-[10px] text-amber-500">{apiInvestmentDetail.opportunity_cost_note || ''}</div>
@@ -1680,90 +2155,148 @@ export const InventoryOperations = () => {
 
           {/* Charts Row 1: Investment Breakdown */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Investment by Category (with ROI)" onDrillThrough={() => handleDrillThrough('/detail/inventory')}>
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={investmentByCategory} onClick={(data) => handleChartSelect(data, 'category')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="category" tick={{ fontSize: 10 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
-                    <Tooltip formatter={(value: any, name: string) => name === 'ROI %' ? `${value}%` : `₹${(value / 100000).toFixed(2)}L`} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="investment" name="Investment" fill="#0D9488" cursor="pointer" />
-                    <Bar yAxisId="left" dataKey="monthlyProfit" name="Monthly Profit" fill="#10B981" cursor="pointer" />
-                    <Line yAxisId="right" type="monotone" dataKey="roi" stroke="#EF4444" strokeWidth={2} name="ROI %" dot={{ fill: '#EF4444', r: 4 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Investment by Category (with ROI)"
+              data={investmentByCategory}
+              columns={[
+                { key: 'category', label: 'Category' },
+                { key: 'investment', label: 'Investment', format: inr },
+                { key: 'monthlyProfit', label: 'Monthly Profit', format: inr },
+                { key: 'roi', label: 'ROI %' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Snapshot investment per category with last-30-day profit; ROI = profit ÷ investment.',
+                source: '/inventory/investment-detail/ — snapshot + report_sales',
+                notes: `${SNAPSHOT_NOTE} ${COGS_NOTE}`,
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={investmentByCategory} onClick={(data) => handleChartSelect(data, 'category')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="category" tick={{ fontSize: 10 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
+                  <Tooltip formatter={(value: any, name: string) => name === 'ROI %' ? `${value}%` : `₹${(value / 100000).toFixed(2)}L`} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="investment" name="Investment" fill="#0D9488" cursor="pointer" />
+                  <Bar yAxisId="left" dataKey="monthlyProfit" name="Monthly Profit" fill="#10B981" cursor="pointer" />
+                  <Line yAxisId="right" type="monotone" dataKey="roi" stroke="#EF4444" strokeWidth={2} name="ROI %" dot={{ fill: '#EF4444', r: 4 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="Investment vs Return Scatter (Bubble = Turnover)" onDrillThrough={() => handleDrillThrough('/detail/inventory')}>
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ScatterChart>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis type="number" dataKey="investment" name="Investment" tick={{ fontSize: 10 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
-                    <YAxis type="number" dataKey="monthlyReturn" name="Monthly Return" tick={{ fontSize: 12 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
-                    <ZAxis type="number" dataKey="size" range={[100, 800]} />
-                    <Tooltip
-                      content={(props: any) => {
-                        if (props.active && props.payload && props.payload[0]) {
-                          const d = props.payload[0].payload;
-                          return (
-                            <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs">
-                              <div className="font-semibold text-gray-900 mb-1">{d.category}</div>
-                              <div className="text-gray-600">Investment: ₹{(Number(d.investment) / 100000).toFixed(2)}L</div>
-                              <div className="text-gray-600">Monthly Return: ₹{(Number(d.monthlyReturn) / 100000).toFixed(2)}L</div>
-                              <div className="text-green-600 font-semibold">ROI: {d.roi}%</div>
-                              <div className="text-blue-600">Turnover: {d.size}x</div>
-                            </div>
-                          );
-                        }
-                        return null;
-                      }}
-                    />
-                    <Scatter data={investmentReturnScatter} fill="#0D9488" onClick={(data: any) => toggleCrossFilter({ id: 'category', label: `Category: ${data.category}`, value: data.category })} />
-                  </ScatterChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Investment vs Return Scatter (Bubble = Turnover)"
+              data={investmentReturnScatter}
+              columns={[
+                { key: 'category', label: 'Category' },
+                { key: 'investment', label: 'Investment', format: inr },
+                { key: 'monthlyReturn', label: 'Monthly Return', format: inr },
+                { key: 'roi', label: 'ROI %' },
+                { key: 'size', label: 'Turnover (x)' },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Per-product snapshot investment vs last-30-day gross margin; bubble size = turnover.',
+                source: '/inventory/investment-detail/ — snapshot + report_sales',
+                notes: `${SNAPSHOT_NOTE} ${COGS_NOTE}`,
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <ScatterChart>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis type="number" dataKey="investment" name="Investment" tick={{ fontSize: 10 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
+                  <YAxis type="number" dataKey="monthlyReturn" name="Monthly Return" tick={{ fontSize: 12 }} tickFormatter={(v) => formatIndianCurrencyAbbreviated(v)} />
+                  <ZAxis type="number" dataKey="size" range={[100, 800]} />
+                  <Tooltip
+                    content={(props: any) => {
+                      if (props.active && props.payload && props.payload[0]) {
+                        const d = props.payload[0].payload;
+                        return (
+                          <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs">
+                            <div className="font-semibold text-gray-900 mb-1">{d.category}</div>
+                            <div className="text-gray-600">Investment: ₹{(Number(d.investment) / 100000).toFixed(2)}L</div>
+                            <div className="text-gray-600">Monthly Return: ₹{(Number(d.monthlyReturn) / 100000).toFixed(2)}L</div>
+                            <div className="text-green-600 font-semibold">ROI: {d.roi}%</div>
+                            <div className="text-blue-600">Turnover: {d.size}x</div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
+                  <Scatter data={investmentReturnScatter} fill="#0D9488" onClick={(data: any) => toggleCrossFilter({ id: 'category', label: `Category: ${data.category}`, value: data.category })} />
+                </ScatterChart>
+              </ResponsiveContainer>
             </ChartCard>
           </div>
 
           {/* Charts Row 2: ROI Trends */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="ROI Trend" onDrillThrough={() => handleDrillThrough('/detail/inventory')}>
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={roiTrend} onClick={(data) => handleChartSelect(data, 'month')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(0)}L`} />
-                    <Tooltip formatter={(value: any, name: string) => name.includes('ROI') ? `${value}%` : `₹${(value / 100000).toFixed(2)}L`} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="roi" name="Monthly ROI %" fill="#0D9488" cursor="pointer" />
-                    <Line yAxisId="right" type="monotone" dataKey="monthlyProfit" stroke="#10B981" strokeWidth={2} name="Monthly Profit" dot={{ fill: '#10B981', r: 4 }} />
-                    <Line yAxisId="right" type="monotone" dataKey="investmentValue" stroke="#6B7280" strokeWidth={2} strokeDasharray="5 5" name="Investment Value" dot={{ fill: '#6B7280', r: 3 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="ROI Trend"
+              data={roiTrend}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'roi', label: 'Monthly ROI %' },
+                { key: 'monthlyProfit', label: 'Monthly Profit', format: inr },
+                { key: 'investmentValue', label: 'Investment Value', format: inr },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Monthly gross margin ÷ total inventory investment, per month.',
+                source: '/inventory/investment-detail/ — snapshot + report_sales',
+                notes: `Investment denominator is the current snapshot applied to all months. ${COGS_NOTE}`,
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={roiTrend} onClick={(data) => handleChartSelect(data, 'month')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(0)}L`} />
+                  <Tooltip formatter={(value: any, name: string) => name.includes('ROI') ? `${value}%` : `₹${(value / 100000).toFixed(2)}L`} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="roi" name="Monthly ROI %" fill="#0D9488" cursor="pointer" />
+                  <Line yAxisId="right" type="monotone" dataKey="monthlyProfit" stroke="#10B981" strokeWidth={2} name="Monthly Profit" dot={{ fill: '#10B981', r: 4 }} />
+                  <Line yAxisId="right" type="monotone" dataKey="investmentValue" stroke="#6B7280" strokeWidth={2} strokeDasharray="5 5" name="Investment Value" dot={{ fill: '#6B7280', r: 3 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="ROI by Velocity Segment" onDrillThrough={() => handleDrillThrough('/detail/inventory')}>
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/inventory')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={roiByVelocitySegment} onClick={(data) => handleChartSelect(data, 'segment')} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis type="number" tick={{ fontSize: 12 }} />
-                    <YAxis type="category" dataKey="segment" width={150} tick={{ fontSize: 10 }} />
-                    <Tooltip formatter={(value: any, name: string) => name === 'ROI %' || name === 'Profit %' ? `${value}%` : name === 'Payback' ? `${value} days` : `₹${(value / 100000).toFixed(2)}L`} />
-                    <Legend />
-                    <Bar dataKey="roi" name="ROI %" fill="#0D9488" cursor="pointer" />
-                    <Bar dataKey="contributionToProfit" name="Profit %" fill="#10B981" cursor="pointer" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="ROI by Velocity Segment"
+              data={roiByVelocitySegment}
+              columns={[
+                { key: 'segment', label: 'Segment' },
+                { key: 'roi', label: 'ROI %' },
+                { key: 'contributionToProfit', label: 'Profit %' },
+                { key: 'investment', label: 'Investment', format: inr },
+                { key: 'monthlyProfit', label: 'Monthly Profit', format: inr },
+              ]}
+              drillTarget={INVENTORY_DETAIL}
+              drillFilters={() => withActive()}
+              info={{
+                formula: 'Snapshot investment and last-30-day profit grouped by movement status (fast/medium/slow/dead).',
+                source: '/inventory/investment-detail/ — snapshot + report_sales',
+                notes: `${SNAPSHOT_NOTE} ${COGS_NOTE}`,
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={roiByVelocitySegment} onClick={(data) => handleChartSelect(data, 'segment')} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis type="number" tick={{ fontSize: 12 }} />
+                  <YAxis type="category" dataKey="segment" width={150} tick={{ fontSize: 10 }} />
+                  <Tooltip formatter={(value: any, name: string) => name === 'ROI %' || name === 'Profit %' ? `${value}%` : name === 'Payback' ? `${value} days` : `₹${(value / 100000).toFixed(2)}L`} />
+                  <Legend />
+                  <Bar dataKey="roi" name="ROI %" fill="#0D9488" cursor="pointer" />
+                  <Bar dataKey="contributionToProfit" name="Profit %" fill="#10B981" cursor="pointer" />
+                </BarChart>
+              </ResponsiveContainer>
             </ChartCard>
           </div>
 
@@ -1787,7 +2320,10 @@ export const InventoryOperations = () => {
                 <tbody>
                   {investmentBySupplier.map((item, idx) => (
                     <tr key={`${idx}-${item.supplier}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                      onClick={() => toggleCrossFilter({ id: 'supplier', label: `Supplier: ${item.supplier}`, value: item.supplier })}>
+                      onClick={() => toggleCrossFilter({ id: 'supplier', label: `Supplier: ${item.supplier}`, value: item.supplier })}
+                      onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive([
+                        { id: 'supplier_name', label: `Supplier: ${item.supplier}`, value: item.supplier },
+                      ]), item)}>
                       <td className="py-2 px-2 font-medium text-gray-900">{item.supplier}</td>
                       <td className="py-2 px-2 text-right text-gray-900">₹{(Number(item.investment) / 100000).toFixed(2)}L</td>
                       <td className="py-2 px-2 text-right text-green-600 font-medium">₹{(Number(item.monthlyReturn) / 1000).toFixed(0)}K</td>
@@ -1826,7 +2362,8 @@ export const InventoryOperations = () => {
                 <tbody>
                   {investmentByLocation.map((item, idx) => (
                     <tr key={`${idx}-${item.location}`} className="border-b border-gray-100 hover:bg-teal-50 cursor-pointer transition-colors"
-                      onClick={() => toggleCrossFilter({ id: 'location', label: `Location: ${item.location}`, value: item.location })}>
+                      onClick={() => toggleCrossFilter({ id: 'location', label: `Location: ${item.location}`, value: item.location })}
+                      onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive(), item)}>
                       <td className="py-2 px-2 font-medium text-gray-900">{item.location}</td>
                       <td className="py-2 px-2 text-right text-gray-900">₹{(Number(item.investment) / 100000).toFixed(2)}L</td>
                       <td className="py-2 px-2 text-right text-gray-900">₹{(Number(item.monthlyRevenue) / 100000).toFixed(2)}L</td>
@@ -1852,7 +2389,8 @@ export const InventoryOperations = () => {
               {capitalEfficiencyMetrics.map((item, idx) => {
                 const percentDiff = item.benchmark ? ((Number(item.value) - Number(item.benchmark)) / Number(item.benchmark) * 100).toFixed(1) : '0.0';
                 return (
-                  <div key={`${idx}-${item.metric}`} className="flex items-center gap-4">
+                  <div key={`${idx}-${item.metric}`} className="flex items-center gap-4 cursor-context-menu"
+                    onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive(), item)}>
                     <div className="w-1/3 text-xs text-gray-700">{item.metric}</div>
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
@@ -1893,7 +2431,8 @@ export const InventoryOperations = () => {
                 </thead>
                 <tbody>
                   {investmentOptimizationPotential.map((item: any, idx: number) => (
-                    <tr key={idx} className="border-b border-gray-100 hover:bg-blue-50 transition-colors">
+                    <tr key={idx} className="border-b border-gray-100 hover:bg-blue-50 transition-colors"
+                      onContextMenu={(e) => openContextMenu(e, INVENTORY_DETAIL, withActive(), item)}>
                       <td className="py-2 px-2 font-medium text-gray-900">{item.action}</td>
                       <td className="py-2 px-2 text-right text-gray-900">₹{(Number(item.currentInvestment) / 100000).toFixed(2)}L</td>
                       <td className="py-2 px-2 text-right text-gray-900">₹{(Number(item.targetInvestment) / 100000).toFixed(2)}L</td>
@@ -1926,19 +2465,8 @@ export const InventoryOperations = () => {
         </>
       )}
 
-      {/* Context Menu */}
-      {contextMenu.visible && (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={closeContextMenu}
-          drillThroughTarget={contextMenu.page}
-          drillThroughContext={{
-            from: 'Inventory Operations',
-            filters: activeFilters,
-          }}
-        />
-      )}
+      {contextMenuElement}
     </div>
+    </DrillSource>
   );
 };

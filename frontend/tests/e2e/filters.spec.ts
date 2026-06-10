@@ -27,7 +27,7 @@ test('filter sidebar collapses and re-expands', async ({ page }) => {
   await expect(page.locator('#filter-sidebar-nav')).toHaveAttribute('aria-hidden', 'false');
 });
 
-test('quick preset change refetches KPI endpoint', async ({ page }) => {
+test('date preset chip change refetches KPI endpoint', async ({ page }) => {
   let kpiCalls = 0;
   page.on('response', (resp) => {
     if (resp.url().includes('/api/executive/kpis/')) kpiCalls++;
@@ -37,15 +37,13 @@ test('quick preset change refetches KPI endpoint', async ({ page }) => {
   await waitForPageSettle(page);
   const initial = kpiCalls;
 
-  // Click "Last 30 Days" preset (button text in FilterPanel)
-  const preset = page.getByRole('button', { name: 'Last 30 Days' });
-  if (await preset.count() > 0) {
-    await preset.first().click();
-    await waitForPageSettle(page);
-    expect(kpiCalls).toBeGreaterThan(initial);
-  } else {
-    test.skip(true, 'Last 30 Days preset button not visible (sidebar may be collapsed)');
-  }
+  // The date filter lives in the GlobalDateBar timeline slicer; click a
+  // non-default preset chip (3M) so the range actually changes.
+  const bar = page.getByTestId('global-date-bar');
+  await expect(bar).toBeVisible();
+  await bar.getByRole('button', { name: '3M', exact: true }).click();
+  await waitForPageSettle(page);
+  expect(kpiCalls).toBeGreaterThan(initial);
 });
 
 test('global filters auto-apply across pages', async ({ page }) => {

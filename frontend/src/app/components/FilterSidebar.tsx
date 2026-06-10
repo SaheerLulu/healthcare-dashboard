@@ -1,58 +1,91 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useLocation } from 'react-router';
-import { Filter, ChevronDown, ChevronRight, ChevronLeft, X, Layers, Check } from 'lucide-react';
+import { Filter, ChevronDown, ChevronRight, ChevronLeft, X, Layers } from 'lucide-react';
 import { FilterPanel } from './FilterPanel';
 import { useCrossFilter } from '../contexts/CrossFilterContext';
+import { useFilters } from '../contexts/FilterContext';
+import { useApiData } from '../hooks/useApiData';
 
-const pageSpecificFilters: Record<string, Array<{ label: string; options: string[] }>> = {
+/**
+ * Page-specific filters (docs/DRILLTHROUGH_DESIGN.md §1).
+ *
+ * `dim` is the backend query param; `optionsKey` selects the data-driven
+ * option list from /executive/filter-options/ (so the sidebar never offers
+ * a value that matches zero rows). Entity dims use {id, name} options and
+ * send the id.
+ */
+interface PageFilterDef {
+  dim: string;
+  label: string;
+  optionsKey: string;
+  entity?: boolean;
+}
+
+const PAGE_FILTERS: Record<string, PageFilterDef[]> = {
   '/sales': [
-    { label: 'Sales Channel', options: ['All', 'POS (Retail)', 'B2B (Wholesale)', 'Online'] },
-    { label: 'Sales Type', options: ['All', 'Cash', 'Credit', 'Card', 'UPI'] },
-    { label: 'Customer Type', options: ['All', 'Walk-in', 'Regular', 'Corporate', 'Hospital'] },
+    { dim: 'customer_type', label: 'Customer Type', optionsKey: 'customer_types' },
+    { dim: 'doctor_id', label: 'Doctor', optionsKey: 'doctors', entity: true },
+    { dim: 'company', label: 'Manufacturer', optionsKey: 'companies' },
+    { dim: 'reason', label: 'Return Reason', optionsKey: 'return_reasons' },
   ],
   '/financial': [
-    { label: 'Account Type', options: ['All', 'Revenue', 'Expenses', 'Assets', 'Liabilities'] },
-    { label: 'Payment Status', options: ['All', 'Paid', 'Pending', 'Overdue'] },
-    { label: 'Financial Period', options: ['Monthly', 'Quarterly', 'Yearly'] },
+    { dim: 'account_type', label: 'Account Type', optionsKey: 'account_types' },
+    { dim: 'account_subtype', label: 'Account Subtype', optionsKey: 'account_subtypes' },
+    { dim: 'voucher_type', label: 'Voucher Type', optionsKey: 'voucher_types' },
+    { dim: 'party_type', label: 'Party Type', optionsKey: 'party_types' },
   ],
   '/inventory': [
-    { label: 'Stock Status', options: ['All', 'In Stock', 'Low Stock', 'Out of Stock', 'Overstocked'] },
-    { label: 'Expiry Status', options: ['All', 'Fresh', 'Expiring Soon', 'Expired'] },
-    { label: 'Movement', options: ['All', 'Fast Moving', 'Slow Moving', 'Non-Moving'] },
+    { dim: 'expiry_status', label: 'Expiry Status', optionsKey: 'expiry_statuses' },
+    { dim: 'movement_status', label: 'Movement', optionsKey: 'movement_statuses' },
+    { dim: 'abc_class', label: 'ABC Class', optionsKey: 'abc_classes' },
+    { dim: 'ved_class', label: 'VED Class', optionsKey: 'ved_classes' },
   ],
   '/procurement': [
-    { label: 'PO Status', options: ['All', 'Draft', 'Pending', 'Approved', 'Received', 'Cancelled'] },
-    { label: 'Supplier Rating', options: ['All', '5 Star', '4+ Star', '3+ Star'] },
-    { label: 'Payment Terms', options: ['All', 'Immediate', '30 Days', '60 Days', '90 Days'] },
+    { dim: 'supplier_id', label: 'Supplier', optionsKey: 'suppliers', entity: true },
+    { dim: 'state', label: 'PO Status', optionsKey: 'po_states' },
   ],
   '/gst': [
-    { label: 'GST Type', options: ['All', 'CGST', 'SGST', 'IGST'] },
-    { label: 'Return Status', options: ['All', 'Filed', 'Pending', 'Late'] },
+    { dim: 'gst_rate', label: 'GST Rate', optionsKey: 'gst_rates' },
+    { dim: 'invoice_type', label: 'Invoice Type', optionsKey: 'invoice_types' },
+    { dim: 'filing_status', label: 'Filing Status', optionsKey: 'filing_statuses' },
   ],
   '/tds': [
-    { label: 'Section', options: ['All', '194C', '194Q', '194O', '194A'] },
-    { label: 'Status', options: ['All', 'Deducted', 'Deposited', 'Pending'] },
+    { dim: 'section', label: 'Section', optionsKey: 'tds_sections' },
+    { dim: 'status', label: 'Status', optionsKey: 'tds_statuses' },
   ],
-  '/working-capital': [
-    { label: 'Party Type', options: ['All', 'Receivable', 'Payable'] },
-    { label: 'Aging', options: ['All', '0-30 Days', '30-60 Days', '60-90 Days', '90+ Days'] },
-  ],
-  '/location': [
-    { label: 'Performance', options: ['All', 'Above Average', 'Below Average'] },
-  ],
+  // NOTE: no '/working-capital' entry — its metrics are party-specific by
+  // definition (receivables are always Customer, payables always Supplier),
+  // so a party_type filter there would be decorative.
   '/product': [
-    { label: 'Lifecycle', options: ['All', 'Introduction', 'Growth', 'Maturity', 'Decline'] },
-    { label: 'Movement', options: ['All', 'Fast', 'Medium', 'Slow', 'Dead'] },
-  ],
-  '/dispatch': [
-    { label: 'Status', options: ['All', 'Pending', 'Dispatched', 'In Transit', 'Delivered'] },
+    { dim: 'company', label: 'Manufacturer', optionsKey: 'companies' },
   ],
   '/loyalty': [
-    { label: 'Tier', options: ['All', 'Platinum', 'Gold', 'Silver', 'Bronze'] },
+    { dim: 'customer_type', label: 'Tier', optionsKey: 'customer_types' },
   ],
-  '/audit': [
-    { label: 'Action', options: ['All', 'Create', 'Update', 'Delete'] },
+  '/detail/sales': [
+    { dim: 'customer_type', label: 'Customer Type', optionsKey: 'customer_types' },
+    { dim: 'doctor_id', label: 'Doctor', optionsKey: 'doctors', entity: true },
+  ],
+  '/detail/purchase': [
+    { dim: 'supplier_id', label: 'Supplier', optionsKey: 'suppliers', entity: true },
+    { dim: 'state', label: 'PO Status', optionsKey: 'po_states' },
+  ],
+  '/detail/inventory': [
+    { dim: 'expiry_status', label: 'Expiry Status', optionsKey: 'expiry_statuses' },
+    { dim: 'movement_status', label: 'Movement', optionsKey: 'movement_statuses' },
+  ],
+  '/detail/financial': [
+    { dim: 'account_type', label: 'Account Type', optionsKey: 'account_types' },
+    { dim: 'voucher_type', label: 'Voucher Type', optionsKey: 'voucher_types' },
+  ],
+  '/detail/gst': [
+    { dim: 'source_table', label: 'GST Register', optionsKey: 'gst_source_tables' },
+    { dim: 'gst_rate', label: 'GST Rate', optionsKey: 'gst_rates' },
+  ],
+  '/detail/sales-returns': [
+    { dim: 'reason', label: 'Return Reason', optionsKey: 'return_reasons' },
+    { dim: 'return_type', label: 'Return Type', optionsKey: 'return_types' },
   ],
 };
 
@@ -64,100 +97,62 @@ const eyebrowStyle: CSSProperties = {
   color: 'var(--ink-3)',
 };
 
-const CustomDropdown = ({ label, options, value, onChange }: {
-  label: string;
-  options: string[];
-  value: string;
-  onChange: (val: string) => void;
+type Option = { value: string; label: string };
+
+const PageFilterSection = ({ def, options, selected, onChange }: {
+  def: PageFilterDef;
+  options: Option[];
+  selected: string[];
+  onChange: (values: string[]) => void;
 }) => {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const isActive = value !== options[0];
+  const [open, setOpen] = useState(selected.length > 0);
 
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  if (!options.length) return null;
 
-  const triggerStyle: CSSProperties = open
-    ? {
-        backgroundColor: 'var(--surface-0)',
-        borderColor: 'var(--brand)',
-        color: 'var(--ink)',
-      }
-    : isActive
-    ? {
-        backgroundColor: 'rgba(15, 157, 154, 0.08)',
-        borderColor: 'rgba(15, 157, 154, 0.30)',
-        color: 'var(--brand-press)',
-      }
-    : {
-        backgroundColor: 'var(--surface-1)',
-        borderColor: 'var(--line)',
-        color: 'var(--ink)',
-      };
+  const toggle = (value: string, checked: boolean) => {
+    onChange(checked ? [...selected, value] : selected.filter(v => v !== value));
+  };
 
   return (
-    <div ref={ref} className="relative">
-      <label className="block mb-1.5" style={{ ...eyebrowStyle, fontSize: 10 }}>{label}</label>
+    <div className="mb-3">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-3 py-2 text-xs rounded-lg border transition-all"
-        style={triggerStyle}
+        className="flex items-center gap-2 w-full py-1.5 px-1 rounded-md transition-colors"
+        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--color-hover-bg)'}
+        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = ''}
       >
-        <span className="truncate">{value}</span>
-        <ChevronDown
-          className={`w-3.5 h-3.5 flex-shrink-0 ml-2 transition-transform ${open ? 'rotate-180' : ''}`}
-          style={{ color: open ? 'var(--brand)' : 'var(--ink-3)' }}
-        />
+        {open
+          ? <ChevronDown className="w-3 h-3" style={{ color: 'var(--ink-3)' }} />
+          : <ChevronRight className="w-3 h-3" style={{ color: 'var(--ink-3)' }} />}
+        <span style={{ ...eyebrowStyle, fontSize: 10 }}>{def.label}</span>
+        {selected.length > 0 && (
+          <span
+            className="ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-full"
+            style={{ background: 'rgba(15, 157, 154, 0.12)', color: 'var(--brand-press)' }}
+          >
+            {selected.length}
+          </span>
+        )}
       </button>
-
       {open && (
-        <div
-          className="absolute z-50 mt-1 w-full rounded-lg shadow-lg overflow-hidden dropdown-animate"
-          style={{
-            backgroundColor: 'var(--surface-0)',
-            border: '1px solid var(--line)',
-          }}
-        >
-          <div className="max-h-48 overflow-y-auto py-1">
-            {options.map(option => {
-              const selected = value === option;
-              return (
-                <button
-                  key={option}
-                  onClick={() => { onChange(option); setOpen(false); }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors"
-                  style={
-                    selected
-                      ? { backgroundColor: 'rgba(15, 157, 154, 0.08)', color: 'var(--brand-press)', fontWeight: 500 }
-                      : { color: 'var(--ink)' }
-                  }
-                  onMouseEnter={(e) => {
-                    if (!selected) e.currentTarget.style.backgroundColor = 'var(--color-hover-bg)';
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!selected) e.currentTarget.style.backgroundColor = '';
-                  }}
-                >
-                  <div
-                    className="w-4 h-4 rounded border flex items-center justify-center flex-shrink-0"
-                    style={
-                      selected
-                        ? { backgroundColor: 'var(--brand)', borderColor: 'var(--brand)' }
-                        : { borderColor: 'var(--line)' }
-                    }
-                  >
-                    {selected && <Check className="w-3 h-3 text-white" />}
-                  </div>
-                  <span>{option}</span>
-                </button>
-              );
-            })}
-          </div>
+        <div className="mt-1 px-1 space-y-0.5 max-h-56 overflow-y-auto">
+          {options.map(opt => (
+            <label
+              key={opt.value}
+              className="flex items-center gap-2.5 py-1.5 px-2 cursor-pointer rounded-md transition-colors"
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--color-hover-bg)'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = ''}
+            >
+              <input
+                type="checkbox"
+                checked={selected.includes(opt.value)}
+                onChange={(e) => toggle(opt.value, e.target.checked)}
+                className="w-3.5 h-3.5 rounded"
+                style={{ accentColor: 'var(--brand)' }}
+              />
+              <span className="text-xs truncate" style={{ color: 'var(--ink)' }}>{opt.label}</span>
+            </label>
+          ))}
         </div>
       )}
     </div>
@@ -174,12 +169,34 @@ export const FilterSidebar = ({ isOpen, onToggle }: FilterSidebarProps) => {
   const [isGlobalOpen, setIsGlobalOpen] = useState(true);
   const [isPageOpen, setIsPageOpen] = useState(true);
   const { activeFilters, removeCrossFilter, clearAllCrossFilters } = useCrossFilter();
-  const [pageFilterValues, setPageFilterValues] = useState<Record<string, string>>({});
+  const { pageFilters, setPageFilter, clearPageFilters } = useFilters();
 
-  const currentPageFilters = pageSpecificFilters[location.pathname] || [];
+  // noFilters: option lists must not shrink to the current selection.
+  const { data: filterOptions } = useApiData<Record<string, any>>(
+    '/executive/filter-options/',
+    {},
+    { noFilters: true }
+  );
 
-  const handlePageFilterChange = (label: string, value: string) =>
-    setPageFilterValues(prev => ({ ...prev, [label]: value }));
+  const route = location.pathname;
+  const defs = PAGE_FILTERS[route] || [];
+  const routeFilters = pageFilters[route] || {};
+  const activePageFilterCount = Object.values(routeFilters).reduce((n, v) => n + (v.length ? 1 : 0), 0);
+
+  const optionsFor = (def: PageFilterDef): Option[] => {
+    // GST registers are a fixed source enum (not exposed by filter-options).
+    if (def.optionsKey === 'gst_source_tables') {
+      return ['gstr1', 'gstr3b', 'gstr2b', 'itc', 'rcm'].map(v => ({ value: v, label: v.toUpperCase() }));
+    }
+    const raw = filterOptions[def.optionsKey];
+    if (!Array.isArray(raw)) return [];
+    if (def.entity) {
+      return raw
+        .filter((o: any) => o && o.id !== undefined && o.id !== null)
+        .map((o: any) => ({ value: String(o.id), label: o.name || `#${o.id}` }));
+    }
+    return raw.map((v: any) => ({ value: String(v), label: String(v) }));
+  };
 
   return (
     <>
@@ -240,8 +257,9 @@ export const FilterSidebar = ({ isOpen, onToggle }: FilterSidebarProps) => {
             {isGlobalOpen && <FilterPanel />}
           </div>
 
-          {/* Page-Specific Filters */}
-          {currentPageFilters.length > 0 && (
+          {/* Page-Specific Filters — wired to FilterContext.pageFilters and
+              sent to the API as real query params by useApiData. */}
+          {defs.length > 0 && (
             <div style={{ borderTop: '1px solid var(--line)' }}>
               <button
                 onClick={() => setIsPageOpen(!isPageOpen)}
@@ -252,22 +270,39 @@ export const FilterSidebar = ({ isOpen, onToggle }: FilterSidebarProps) => {
               >
                 <Layers className="w-3.5 h-3.5" style={{ color: 'var(--brand)' }} />
                 <span className="flex-1 text-left" style={eyebrowStyle}>Page Filters</span>
+                {activePageFilterCount > 0 && (
+                  <span
+                    className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                    style={{ background: 'rgba(15, 157, 154, 0.12)', color: 'var(--brand-press)' }}
+                  >
+                    {activePageFilterCount}
+                  </span>
+                )}
                 {isPageOpen
                   ? <ChevronDown className="w-3.5 h-3.5" style={{ color: 'var(--ink-3)' }} />
                   : <ChevronRight className="w-3.5 h-3.5" style={{ color: 'var(--ink-3)' }} />}
               </button>
 
               {isPageOpen && (
-                <div className="px-4 py-4 space-y-4">
-                  {currentPageFilters.map((filter) => (
-                    <CustomDropdown
-                      key={filter.label}
-                      label={filter.label}
-                      options={filter.options}
-                      value={pageFilterValues[filter.label] || filter.options[0]}
-                      onChange={(val) => handlePageFilterChange(filter.label, val)}
+                <div className="px-3 py-3">
+                  {defs.map((def) => (
+                    <PageFilterSection
+                      key={def.dim}
+                      def={def}
+                      options={optionsFor(def)}
+                      selected={routeFilters[def.dim] || []}
+                      onChange={(values) => setPageFilter(route, def.dim, values)}
                     />
                   ))}
+                  {activePageFilterCount > 0 && (
+                    <button
+                      onClick={() => clearPageFilters(route)}
+                      className="w-full mt-1 px-3 py-1.5 text-[11px] font-medium rounded-lg border transition-colors"
+                      style={{ color: 'var(--ink)', backgroundColor: 'var(--surface-0)', borderColor: 'var(--line)' }}
+                    >
+                      Clear Page Filters
+                    </button>
+                  )}
                 </div>
               )}
             </div>

@@ -8,7 +8,16 @@ from reports.models import ReportSales
 from .helpers import (
     parse_filters, apply_common_filters,
     apply_common_filters_range, prior_period_range, growth_pct,
+    apply_dim_filters, apply_ordering, paginate_detail,
 )
+
+# Loyalty page dimension → ReportSales column (DRILLTHROUGH_DESIGN.md §1).
+# Loyalty "tiers" ARE customer_type values.
+LOYALTY_DIMS = {
+    'customer_type': 'customer_type',
+    'customer_id': 'customer_id',
+    'customer_name': 'customer_name',
+}
 
 
 def _fmt_num(value):
@@ -26,7 +35,10 @@ def _fmt_num(value):
 @permission_classes([DashboardPermission])
 def overview(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f)
+    qs = apply_dim_filters(
+        apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f),
+        f, LOYALTY_DIMS,
+    )
 
     total_members = qs.values('customer_id').distinct().count()
     agg = qs.aggregate(
@@ -40,8 +52,11 @@ def overview(request):
 
     # Period-over-period deltas
     prev_start, prev_end = prior_period_range(f)
-    prev_qs = apply_common_filters_range(
-        ReportSales.objects.filter(customer_id__isnull=False), f, prev_start, prev_end
+    prev_qs = apply_dim_filters(
+        apply_common_filters_range(
+            ReportSales.objects.filter(customer_id__isnull=False), f, prev_start, prev_end
+        ),
+        f, LOYALTY_DIMS,
     )
     prev_members = prev_qs.values('customer_id').distinct().count()
     prev_agg = prev_qs.aggregate(
@@ -82,7 +97,10 @@ def overview(request):
 @permission_classes([DashboardPermission])
 def tiers(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f)
+    qs = apply_dim_filters(
+        apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f),
+        f, LOYALTY_DIMS,
+    )
 
     data = list(
         qs.values('customer_type')
@@ -101,7 +119,9 @@ def tiers(request):
 @permission_classes([DashboardPermission])
 def redemption(request):
     f = parse_filters(request)
-    base_qs = apply_common_filters(ReportSales.objects.all(), f)
+    base_qs = apply_dim_filters(
+        apply_common_filters(ReportSales.objects.all(), f), f, LOYALTY_DIMS,
+    )
 
     # Issued + redeemed per month — chart needs both lines.
     issued_by_month = {
@@ -160,7 +180,10 @@ def rfm(request):
     f = parse_filters(request)
     end = _date.fromisoformat(f['end_date'])
 
-    qs = apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f)
+    qs = apply_dim_filters(
+        apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f),
+        f, LOYALTY_DIMS,
+    )
     customers = list(
         qs.values('customer_id', 'customer_name', 'customer_type')
         .annotate(
@@ -251,15 +274,20 @@ def rfm(request):
 @permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f)
-
-    data = list(
-        qs.values('customer_id', 'customer_name', 'customer_type', 'customer_loyalty_points')
-        .annotate(
-            revenue=Sum('line_total'),
-            orders=Count('source_id', distinct=True),
-            points_redeemed=Sum('loyalty_points_redeemed'),
-        )
-        .order_by('-revenue')
+    qs = apply_dim_filters(
+        apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f),
+        f, LOYALTY_DIMS,
     )
-    return Response(data)
+
+    qs = qs.values(
+        'customer_id', 'customer_name', 'customer_type', 'customer_loyalty_points'
+    ).annotate(
+        revenue=Sum('line_total'),
+        orders=Count('source_id', distinct=True),
+        points_redeemed=Sum('loyalty_points_redeemed'),
+    )
+    qs = apply_ordering(qs, f, allowed=(
+        'customer_id', 'customer_name', 'customer_type', 'customer_loyalty_points',
+        'revenue', 'orders', 'points_redeemed',
+    ), default='-revenue')
+    return paginate_detail(request, qs)

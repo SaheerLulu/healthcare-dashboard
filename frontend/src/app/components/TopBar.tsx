@@ -122,6 +122,11 @@ export const TopBar = () => {
   const selectedLocation = LOCATIONS.find(
     l => filters.locations.length > 0 ? filters.locations.includes(l.id) : l.id === ''
   ) || LOCATIONS[0];
+  // The sidebar offers multi-select; reflect that honestly instead of
+  // showing only the first match.
+  const locationDisplay = filters.locations.length > 1
+    ? `${filters.locations.length} locations`
+    : selectedLocation.name;
 
   const isGroupActive = (group: NavGroup) =>
     group.paths.some(p => p === '/' ? location.pathname === '/' : location.pathname === p);
@@ -298,7 +303,7 @@ export const TopBar = () => {
             }
           >
             <MapPin className="w-3.5 h-3.5" style={{ color: 'var(--brand)' }} />
-            <span className="max-w-[120px] truncate">{selectedLocation.name}</span>
+            <span className="max-w-[120px] truncate">{locationDisplay}</span>
             <ChevronDown
               className={`w-3.5 h-3.5 transition-transform ${openDropdown === 'location' ? 'rotate-180' : ''}`}
               style={{ color: 'var(--ink-3)' }}

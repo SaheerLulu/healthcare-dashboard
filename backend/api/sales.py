@@ -5,7 +5,6 @@ from django.db.models import Sum, Count, Avg, Max, F, Q
 from rest_framework.decorators import api_view, permission_classes
 from .permissions import DashboardPermission
 from rest_framework.response import Response
-from rest_framework.pagination import PageNumberPagination
 
 from reports.models import ReportSales, ReportSalesReturns, ReportFinancial, ReportInventory
 from .helpers import (
@@ -13,9 +12,72 @@ from .helpers import (
     apply_common_filters,
     apply_financial_filters,
     apply_common_filters_range,
+    apply_dim_filters,
+    apply_ordering,
+    paginate_detail,
     prior_period_range,
     growth_pct,
 )
+
+# Dimension → ReportSales column mapping (docs/DRILLTHROUGH_DESIGN.md §1).
+SALES_DIMS = {
+    'product_id': 'product_id',
+    'product_name': 'product_name',
+    'customer_id': 'customer_id',
+    'customer_name': 'customer_name',
+    'customer_type': 'customer_type',
+    'doctor_id': 'doctor_id',
+    'doctor_name': 'doctor_name',
+    'speciality': 'doctor_specialization',
+    'company': 'product_company',
+    'molecule': 'product_molecule',
+    'invoice_no': 'invoice_no',
+    'batch_no': 'batch_no',
+    'month': 'sale_month',
+}
+
+# Dimension → ReportSalesReturns column mapping.
+RETURNS_DIMS = {
+    'reason': 'reason',
+    'return_type': 'return_type',
+    'status': 'status',
+    'customer_id': 'customer_id',
+    'customer_name': 'customer_name',
+    'customer_type': 'customer_type',
+    'product_id': 'product_id',
+    'product_name': 'product_name',
+    'batch_no': 'batch_no',
+    'month': 'return_month',
+    'invoice_no': 'original_invoice_no',
+}
+
+
+def _apply_sales_filters(qs, f):
+    """Common date/location/category/channel/payment filters + sales dims."""
+    return apply_dim_filters(apply_common_filters(qs, f), f, SALES_DIMS)
+
+
+# Sales dims the returns table can ALSO honor. Return-rate style metrics
+# (returns ÷ sales) must filter both sides identically; a doctor/company/
+# molecule filter would shrink only the sales denominator and inflate the
+# rate, so those dims are ignored on rate denominators.
+RATE_SAFE_SALES_DIMS = {k: v for k, v in SALES_DIMS.items() if k in RETURNS_DIMS}
+
+
+def _rate_safe_sales_qs(f):
+    """Sales queryset for returns-rate denominators: only dims that the
+    returns numerator can match are applied."""
+    return apply_dim_filters(
+        apply_common_filters(ReportSales.objects.all(), f), f, RATE_SAFE_SALES_DIMS
+    )
+
+
+def _sales_range(qs, f, start, end):
+    """Like _apply_sales_filters but with explicit date range (prior-period).
+    Applies the same dimension filters so period deltas are honest."""
+    return apply_dim_filters(
+        apply_common_filters_range(qs, f, start, end), f, SALES_DIMS
+    )
 
 
 def _apply_returns_filters(qs, f):
@@ -30,11 +92,12 @@ def _apply_returns_filters(qs, f):
         qs = qs.filter(product_category__in=f['categories'])
     elif 'category' in f:
         qs = qs.filter(product_category=f['category'])
-    return qs
+    return apply_dim_filters(qs, f, RETURNS_DIMS)
 
 
 def _returns_range(qs, f, start, end):
-    """Apply returns filters with explicit date override (for prior-period)."""
+    """Apply returns filters with explicit date override (for prior-period).
+    Applies the same dimension filters so period deltas are honest."""
     qs = qs.filter(return_date__gte=start, return_date__lte=end)
     if 'location_id' in f:
         qs = qs.filter(location_id=f['location_id'])
@@ -44,14 +107,14 @@ def _returns_range(qs, f, start, end):
         qs = qs.filter(product_category__in=f['categories'])
     elif 'category' in f:
         qs = qs.filter(product_category=f['category'])
-    return qs
+    return apply_dim_filters(qs, f, RETURNS_DIMS)
 
 
 @api_view(['GET'])
 @permission_classes([DashboardPermission])
 def overview(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _apply_sales_filters(ReportSales.objects.all(), f)
 
     agg = qs.aggregate(
         total_revenue=Sum('line_total'),
@@ -94,7 +157,7 @@ def overview(request):
 
     # Prior-period comparison
     prev_start, prev_end = prior_period_range(f)
-    prev_qs = apply_common_filters_range(ReportSales.objects.all(), f, prev_start, prev_end)
+    prev_qs = _sales_range(ReportSales.objects.all(), f, prev_start, prev_end)
     prev_agg = prev_qs.aggregate(
         rev=Sum('line_total'),
         ords=Count('source_id', distinct=True),
@@ -208,7 +271,7 @@ def overview(request):
 @permission_classes([DashboardPermission])
 def hourly(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _apply_sales_filters(ReportSales.objects.all(), f)
 
     data = list(
         qs.values('sale_hour')
@@ -222,7 +285,7 @@ def hourly(request):
 @permission_classes([DashboardPermission])
 def payment_mix(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _apply_sales_filters(ReportSales.objects.all(), f)
 
     data = list(
         qs.values('payment_method')
@@ -236,7 +299,7 @@ def payment_mix(request):
 @permission_classes([DashboardPermission])
 def products(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _apply_sales_filters(ReportSales.objects.all(), f)
 
     data = list(
         qs.values('product_id', 'product_name', 'product_category', 'product_company')
@@ -257,7 +320,7 @@ def products(request):
 @permission_classes([DashboardPermission])
 def categories(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _apply_sales_filters(ReportSales.objects.all(), f)
 
     data = list(
         qs.values('product_category')
@@ -271,7 +334,7 @@ def categories(request):
 @permission_classes([DashboardPermission])
 def slow_movers(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _apply_sales_filters(ReportSales.objects.all(), f)
 
     data = list(
         qs.values('product_id', 'product_name', 'product_category')
@@ -324,7 +387,7 @@ def slow_movers(request):
 @permission_classes([DashboardPermission])
 def customers(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _apply_sales_filters(ReportSales.objects.all(), f)
 
     data = list(
         qs.filter(customer_id__isnull=False)
@@ -343,7 +406,7 @@ def customers(request):
 @permission_classes([DashboardPermission])
 def customer_segments(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _apply_sales_filters(ReportSales.objects.all(), f)
 
     data = list(
         qs.filter(customer_id__isnull=False)
@@ -361,7 +424,7 @@ def customer_segments(request):
 @permission_classes([DashboardPermission])
 def doctors(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _apply_sales_filters(ReportSales.objects.all(), f)
 
     data = list(
         qs.filter(doctor_id__isnull=False)
@@ -380,7 +443,7 @@ def doctors(request):
 @permission_classes([DashboardPermission])
 def doctor_specialties(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _apply_sales_filters(ReportSales.objects.all(), f)
 
     data = list(
         qs.filter(doctor_id__isnull=False)
@@ -396,7 +459,7 @@ def doctor_specialties(request):
 def returns_overview(request):
     f = parse_filters(request)
     qs = _apply_returns_filters(ReportSalesReturns.objects.all(), f)
-    sales_qs = apply_common_filters(ReportSales.objects.all(), f)
+    sales_qs = _rate_safe_sales_qs(f)
 
     agg = qs.aggregate(
         total_returns=Count('source_id', distinct=True),
@@ -424,7 +487,10 @@ def returns_overview(request):
         .aggregate(v=Sum('line_total'))['v'] or 0
     )
     prev_sales = float(
-        apply_common_filters_range(ReportSales.objects.all(), f, prev_start, prev_end)
+        apply_dim_filters(
+            apply_common_filters_range(ReportSales.objects.all(), f, prev_start, prev_end),
+            f, RATE_SAFE_SALES_DIMS,
+        )
         .aggregate(v=Sum('line_total'))['v'] or 0
     )
     prev_rate = (prev_returns / prev_sales * 100) if prev_sales else 0.0
@@ -498,7 +564,7 @@ def returns_overview(request):
 def returns_by_category(request):
     f = parse_filters(request)
     qs = _apply_returns_filters(ReportSalesReturns.objects.all(), f)
-    sales_qs = apply_common_filters(ReportSales.objects.all(), f)
+    sales_qs = _rate_safe_sales_qs(f)
 
     sales_by_cat = {
         r['product_category']: float(r['v'] or 0)
@@ -523,7 +589,7 @@ def returns_by_category(request):
 @permission_classes([DashboardPermission])
 def product_profitability(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _apply_sales_filters(ReportSales.objects.all(), f)
 
     total_margin = float(qs.aggregate(m=Sum('gross_margin'))['m'] or 0)
 
@@ -549,7 +615,7 @@ def product_profitability(request):
 @permission_classes([DashboardPermission])
 def customer_growth(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.filter(customer_id__isnull=False), f)
+    qs = _apply_sales_filters(ReportSales.objects.filter(customer_id__isnull=False), f)
 
     data = list(
         qs.values('sale_month')
@@ -589,7 +655,7 @@ def outstanding_aging(request):
 @permission_classes([DashboardPermission])
 def doctor_prescription_trend(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.filter(doctor_id__isnull=False), f)
+    qs = _apply_sales_filters(ReportSales.objects.filter(doctor_id__isnull=False), f)
 
     data = list(
         qs.values('sale_month')
@@ -607,7 +673,7 @@ def doctor_prescription_trend(request):
 @permission_classes([DashboardPermission])
 def doctor_radar(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.filter(doctor_id__isnull=False), f)
+    qs = _apply_sales_filters(ReportSales.objects.filter(doctor_id__isnull=False), f)
 
     top = list(
         qs.values('doctor_id', 'doctor_name', 'doctor_specialization')
@@ -647,7 +713,7 @@ def doctor_radar(request):
 @permission_classes([DashboardPermission])
 def returns_profit_impact(request):
     f = parse_filters(request)
-    sales_qs = apply_common_filters(ReportSales.objects.all(), f)
+    sales_qs = _rate_safe_sales_qs(f)
     returns_qs = _apply_returns_filters(ReportSalesReturns.objects.all(), f)
 
     gross_profit = float(sales_qs.aggregate(m=Sum('gross_margin'))['m'] or 0)
@@ -662,19 +728,29 @@ def returns_profit_impact(request):
     return Response(data)
 
 
+DETAIL_COLUMNS = (
+    'sale_date', 'invoice_no', 'channel', 'source_type', 'customer_name',
+    'doctor_name', 'location_name', 'product_name', 'product_category',
+    'batch_no', 'quantity', 'unit_price', 'discount_amount', 'discount_percent',
+    'tax_percent', 'taxable_value', 'gross_margin', 'line_total',
+    'payment_method',
+)
+
+
 @api_view(['GET'])
 @permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f).order_by('-sale_date').values(
-        'sale_date', 'invoice_no', 'channel', 'customer_name',
-        'product_name', 'product_category', 'quantity', 'unit_price',
-        'discount_amount', 'discount_percent', 'tax_percent', 'line_total', 'payment_method',
-    )
+    qs = _apply_sales_filters(ReportSales.objects.all(), f).values(*DETAIL_COLUMNS)
+    qs = apply_ordering(qs, f, allowed=set(DETAIL_COLUMNS), default='-sale_date')
+    return paginate_detail(request, qs)
 
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    return paginator.get_paginated_response(list(page) if page else [])
+
+RETURNS_DETAIL_COLUMNS = (
+    'return_date', 'return_no', 'return_type', 'original_invoice_no',
+    'customer_name', 'product_name', 'product_category', 'batch_no',
+    'quantity', 'unit_price', 'line_total', 'reason', 'status',
+)
 
 
 @api_view(['GET'])
@@ -682,12 +758,37 @@ def detail(request):
 def returns_detail(request):
     f = parse_filters(request)
     qs = _apply_returns_filters(ReportSalesReturns.objects.all(), f)
-    qs = qs.order_by('-return_date').values(
-        'return_date', 'return_no', 'return_type', 'original_invoice_no',
-        'customer_name', 'product_name', 'product_category', 'batch_no',
-        'quantity', 'unit_price', 'line_total', 'reason', 'status',
-    )
+    qs = qs.values(*RETURNS_DETAIL_COLUMNS)
+    qs = apply_ordering(qs, f, allowed=set(RETURNS_DETAIL_COLUMNS), default='-return_date')
+    return paginate_detail(request, qs)
 
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    return paginator.get_paginated_response(list(page) if page else [])
+
+@api_view(['GET'])
+@permission_classes([DashboardPermission])
+def bills(request):
+    """Invoice-level grouping of sales lines for the Sales Bills report.
+
+    Row keys (frontend contract): invoice_no, sale_date, channel,
+    customer_name, location_name, payment_method, lines, subtotal,
+    discount, gst, total.
+    """
+    f = parse_filters(request)
+    qs = (
+        _apply_sales_filters(ReportSales.objects.all(), f)
+        .values('invoice_no', 'channel', 'customer_name', 'location_name', 'payment_method')
+        .annotate(
+            sale_date=Max('sale_date'),
+            lines=Count('id'),
+            subtotal=Sum('taxable_value'),
+            discount=Sum('discount_amount'),
+            gst=Sum(F('cgst_amount') + F('sgst_amount') + F('igst_amount')),
+            total=Sum('line_total'),
+        )
+    )
+    qs = apply_ordering(
+        qs, f,
+        allowed={'invoice_no', 'sale_date', 'customer_name', 'total', 'lines', 'channel',
+                 'subtotal', 'discount', 'gst'},
+        default='-sale_date',
+    )
+    return paginate_detail(request, qs)

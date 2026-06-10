@@ -230,6 +230,21 @@ export const PipelineManagement = () => {
         </div>
       )}
 
+      {pipelineState.result?.status === 'already_running' && !pipelineState.running && (
+        <div
+          role="status"
+          className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6 flex items-start gap-3"
+        >
+          <AlertTriangle className="w-5 h-5 mt-0.5 text-amber-600" />
+          <div>
+            <p className="font-medium text-amber-900">Sync skipped</p>
+            <p className="text-sm text-amber-800 mt-1">
+              {pipelineState.result.error || 'Another pipeline run (cron or CLI) is in progress. Try again once it finishes.'}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* US01 — Per-pipeline status cards */}
       <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-3">
         Pipeline status (last successful run per table)

@@ -19,8 +19,11 @@ class PipelineLog(models.Model):
 
     @classmethod
     def get_last_id(cls, pipeline_type):
+        # 'partial' runs still advanced the watermark for every record that
+        # synced cleanly — failed source ids live in PipelineError and are
+        # retried on the next run, so the watermark remains trustworthy.
         log = cls.objects.filter(
-            pipeline_type=pipeline_type, status='success'
+            pipeline_type=pipeline_type, status__in=('success', 'partial'),
         ).order_by('-last_run_at').first()
         return log.last_synced_id if log else 0
 

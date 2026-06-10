@@ -33,35 +33,43 @@ test('sidebar collapsed state persists across reload', async ({ page }) => {
   }
 });
 
-test('quick preset choice persists across reload', async ({ page }) => {
+test('date preset choice persists across reload (default_quick_preset_v2)', async ({ page }) => {
   await page.goto('/');
   await waitForPageSettle(page);
 
-  const preset = page.getByRole('button', { name: 'This Month' });
-  if (await preset.count() === 0) {
-    test.skip(true, 'This Month preset not visible (sidebar collapsed?)');
-    return;
+  // Pick the 7D chip in the GlobalDateBar and confirm the prefs PATCH
+  // carries the v2 key with the reproducible preset name.
+  const patchPromise = page.waitForRequest((req) =>
+    req.url().includes('/api/prefs/') && req.method() === 'PATCH', { timeout: 10_000 }
+  ).catch(() => null);
+  const bar = page.getByTestId('global-date-bar');
+  await expect(bar).toBeVisible();
+  await bar.getByRole('button', { name: '7D', exact: true }).click();
+  const patchReq = await patchPromise;
+  if (patchReq) {
+    expect(patchReq.postData() || '').toContain('default_quick_preset_v2');
+    expect(patchReq.postData() || '').toContain('Last 7 Days');
   }
-  await preset.first().click();
   await waitForPageSettle(page);
 
-  // Reload and confirm This Month is highlighted again. The presence
-  // of the button with an "active" style is hard to assert without a
-  // distinguishing class — instead, we look at the request params on
-  // the next executive/kpis call.
-  await page.reload();
+  // Reload: the hydrated window must span exactly 7 days (anchored to the
+  // freshest data date when the pipeline is stale, so we assert span,
+  // not absolute dates).
   let params = '';
   page.on('request', (req) => {
     if (req.url().includes('/api/executive/kpis/') && !params) {
       params = req.url();
     }
   });
+  await page.reload();
   await waitForPageSettle(page);
-  // start_date should be the first of this month.
-  const today = new Date();
-  const firstOfMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
-  expect(params).toContain(`start_date=${firstOfMonth}`);
+  const url = new URL(params);
+  const start = new Date(url.searchParams.get('start_date')!);
+  const end = new Date(url.searchParams.get('end_date')!);
+  const spanDays = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+  expect(spanDays).toBe(7);
 
   // Restore default for subsequent tests
-  await page.getByRole('button', { name: /Last 6 Months/i }).first().click();
+  await bar.getByRole('button', { name: '1M', exact: true }).click();
+  await waitForPageSettle(page);
 });

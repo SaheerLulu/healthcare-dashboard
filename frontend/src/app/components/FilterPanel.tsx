@@ -36,25 +36,13 @@ export const FilterPanel = () => {
     { noFilters: true }
   );
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
-    time: true,
-    location: false,
+    location: true,
     product: false,
     transaction: false,
   });
 
   const toggleSection = (section: string) =>
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
-
-  const quickPresets = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'This Month', 'Last Month', 'This Quarter', 'This FY'];
-
-  const fieldWrap =
-    'flex items-center rounded-lg border px-2 transition-colors focus-within:border-[var(--brand)]';
-  const fieldWrapStyle = {
-    background: 'var(--surface-1)',
-    borderColor: 'var(--line)',
-  } as const;
-  const fieldInput =
-    'flex-1 h-9 bg-transparent border-0 outline-none text-xs px-1';
 
   const checkbox = (
     checked: boolean,
@@ -81,95 +69,8 @@ export const FilterPanel = () => {
 
   return (
     <div className="px-4 pb-4">
-      {/* Time & Period */}
-      <div className="mb-4">
-        <button
-          onClick={() => toggleSection('time')}
-          className="flex items-center gap-2 w-full py-2 px-1 rounded-md transition-colors"
-          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--color-hover-bg)'}
-          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = ''}
-        >
-          {expandedSections.time
-            ? <ChevronDown className="w-3 h-3" style={{ color: 'var(--ink-3)' }} />
-            : <ChevronRight className="w-3 h-3" style={{ color: 'var(--ink-3)' }} />}
-          <span style={sectionHeaderStyle}>Time & Period</span>
-        </button>
-
-        {expandedSections.time && (
-          <div className="mt-3 space-y-3 px-1">
-            <div>
-              <label className="block mb-2" style={labelStyle}>Quick Presets</label>
-              <div className="flex flex-wrap gap-1.5">
-                {quickPresets.map(preset => {
-                  const active = filters.quickPreset === preset;
-                  return (
-                    <button
-                      key={preset}
-                      onClick={() => updateFilters({ quickPreset: preset })}
-                      className="rounded-full text-[11px] font-medium px-2.5 py-1 border transition-colors"
-                      style={
-                        active
-                          ? {
-                              background: 'rgba(15, 157, 154, 0.10)',
-                              color: 'var(--brand-press)',
-                              borderColor: 'rgba(15, 157, 154, 0.35)',
-                            }
-                          : {
-                              background: 'var(--surface-0)',
-                              color: 'var(--ink-2)',
-                              borderColor: 'var(--line)',
-                            }
-                      }
-                    >
-                      {preset}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
-              <label className="block mb-2" style={labelStyle}>Financial Year</label>
-              <div className={fieldWrap} style={fieldWrapStyle}>
-                <select
-                  value={filters.financialYear}
-                  onChange={(e) => updateFilters({ financialYear: e.target.value })}
-                  className={fieldInput}
-                  style={{ color: 'var(--ink)' }}
-                >
-                  <option>FY 2025-26</option>
-                  <option>FY 2024-25</option>
-                  <option>FY 2023-24</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label className="block mb-2" style={labelStyle}>Date Range</label>
-              <div className="flex gap-2">
-                <div className={`${fieldWrap} flex-1`} style={fieldWrapStyle}>
-                  <input
-                    type="date"
-                    value={filters.dateRange.start}
-                    onChange={(e) => updateFilters({ dateRange: { ...filters.dateRange, start: e.target.value } })}
-                    className={fieldInput}
-                    style={{ color: 'var(--ink)' }}
-                  />
-                </div>
-                <div className={`${fieldWrap} flex-1`} style={fieldWrapStyle}>
-                  <input
-                    type="date"
-                    value={filters.dateRange.end}
-                    onChange={(e) => updateFilters({ dateRange: { ...filters.dateRange, end: e.target.value } })}
-                    className={fieldInput}
-                    style={{ color: 'var(--ink)' }}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
+      {/* Date filtering moved to the GlobalDateBar timeline slicer (Layout);
+          the sidebar now carries only categorical dimensions. */}
 
       {/* Location */}
       {options.locations.length > 0 && (

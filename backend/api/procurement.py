@@ -1,22 +1,53 @@
 """Procurement Intelligence API endpoints."""
-from django.db.models import Sum, Count, Avg, Min, Max, Q
+from django.db.models import Sum, Count, Avg, Min, Max, Q, F
 from rest_framework.decorators import api_view, permission_classes
 from .permissions import DashboardPermission
 from rest_framework.response import Response
-from rest_framework.pagination import PageNumberPagination
 
 from reports.models import ReportPurchases
-from .helpers import parse_filters
+from .helpers import (
+    parse_filters, apply_dim_filters, apply_ordering, paginate_detail,
+)
+
+# Dimension → column mapping (docs/DRILLTHROUGH_DESIGN.md §1).
+PUR_DIMS = {
+    'supplier_id': 'supplier_id',
+    'supplier_name': 'supplier_name',
+    'state': 'state',
+    'product_id': 'product_id',
+    'product_name': 'product_name',
+    'company': 'product_company',
+    'batch_no': 'batch_no',
+    'invoice_no': 'bill_no',
+    'month': 'purchase_month',
+}
 
 
-def _purchase_qs(f):
+def _base_qs(f):
+    """Date/location/category/dimension filtering WITHOUT the default
+    is_return exclusion. An explicit ?is_return= filter is honored here."""
     qs = ReportPurchases.objects.filter(
-        bill_date__gte=f['start_date'], bill_date__lte=f['end_date'], is_return=False,
+        bill_date__gte=f['start_date'], bill_date__lte=f['end_date'],
     )
     if 'location_id' in f:
         qs = qs.filter(location_id=f['location_id'])
     elif 'location_ids' in f:
         qs = qs.filter(location_id__in=f['location_ids'])
+    if 'categories' in f:
+        qs = qs.filter(product_category__in=f['categories'])
+    elif 'category' in f:
+        qs = qs.filter(product_category=f['category'])
+    if 'is_return' in f:
+        qs = qs.filter(is_return=f['is_return'])
+    return apply_dim_filters(qs, f, PUR_DIMS)
+
+
+def _purchase_qs(f):
+    """Filtered purchase lines. Returns are excluded by default, but an
+    explicit ?is_return= filter (drill-through) overrides the exclusion."""
+    qs = _base_qs(f)
+    if 'is_return' not in f:
+        qs = qs.filter(is_return=False)
     return qs
 
 
@@ -122,13 +153,8 @@ def lead_time(request):
 @permission_classes([DashboardPermission])
 def returns(request):
     f = parse_filters(request)
-    qs = ReportPurchases.objects.filter(
-        bill_date__gte=f['start_date'], bill_date__lte=f['end_date'], is_return=True,
-    )
-    if 'location_id' in f:
-        qs = qs.filter(location_id=f['location_id'])
-    elif 'location_ids' in f:
-        qs = qs.filter(location_id__in=f['location_ids'])
+    f['is_return'] = True  # this endpoint is returns-only by definition
+    qs = _purchase_qs(f)
 
     data = list(
         qs.values('product_category')
@@ -150,11 +176,9 @@ def overview(request):
     active_suppliers = qs.values('supplier_id').distinct().count()
     avg_lead = qs.filter(lead_time_days__isnull=False).aggregate(avg=Avg('lead_time_days'))['avg']
 
-    from .helpers import parse_filters as _  # already imported
-    from reports.models import ReportPurchases as RP
-    ret_qs = RP.objects.filter(
-        bill_date__gte=f['start_date'], bill_date__lte=f['end_date'], is_return=True,
-    )
+    rf = dict(f)
+    rf['is_return'] = True
+    ret_qs = _purchase_qs(rf)
     returns_value = float(ret_qs.aggregate(total=Sum('line_total'))['total'] or 0)
     returns_count = ret_qs.count()
 
@@ -202,13 +226,7 @@ def savings(request):
 def po_status(request):
     """PO status distribution."""
     f = parse_filters(request)
-    qs = ReportPurchases.objects.filter(
-        bill_date__gte=f['start_date'], bill_date__lte=f['end_date'], is_return=False,
-    )
-    if 'location_id' in f:
-        qs = qs.filter(location_id=f['location_id'])
-    elif 'location_ids' in f:
-        qs = qs.filter(location_id__in=f['location_ids'])
+    qs = _purchase_qs(f)
     data = list(
         qs.values('state')
         .annotate(count=Count('source_id', distinct=True))
@@ -220,23 +238,48 @@ def po_status(request):
     return Response(data)
 
 
+DETAIL_COLUMNS = (
+    'bill_date', 'bill_no', 'supplier_name', 'product_name',
+    'product_category', 'batch_no', 'quantity', 'purchase_rate', 'mrp',
+    'tax_percent', 'line_total', 'is_return', 'location_name',
+)
+
+
 @api_view(['GET'])
 @permission_classes([DashboardPermission])
 def detail(request):
+    """Row-level purchase lines (returns included unless filtered)."""
     f = parse_filters(request)
-    qs = ReportPurchases.objects.filter(
-        bill_date__gte=f['start_date'], bill_date__lte=f['end_date'],
-    ).order_by('-bill_date')
-    if 'location_id' in f:
-        qs = qs.filter(location_id=f['location_id'])
-    elif 'location_ids' in f:
-        qs = qs.filter(location_id__in=f['location_ids'])
-    qs = qs.values(
-        'bill_date', 'bill_no', 'supplier_name', 'product_name',
-        'product_category', 'quantity', 'purchase_rate', 'mrp',
-        'tax_percent', 'line_total', 'is_return', 'location_name',
-    )
+    qs = _base_qs(f).values(*DETAIL_COLUMNS)
+    qs = apply_ordering(qs, f, set(DETAIL_COLUMNS), '-bill_date')
+    return paginate_detail(request, qs)
 
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    return paginator.get_paginated_response(list(page) if page else [])
+
+@api_view(['GET'])
+@permission_classes([DashboardPermission])
+def bills(request):
+    """Bill-level grouping of purchase lines for the Purchase Bills page.
+
+    Row keys (frontend contract): bill_no, bill_date, supplier_name,
+    location_name, state, payment_type, is_return, lines, subtotal, gst,
+    total. Returns are included (is_return is a group key) unless filtered.
+    """
+    f = parse_filters(request)
+    qs = (
+        _base_qs(f)
+        .values('bill_no', 'supplier_name', 'location_name', 'state',
+                'payment_type', 'is_return')
+        .annotate(
+            bill_date=Max('bill_date'),
+            lines=Count('id'),
+            gst=Sum(F('cgst_amount') + F('sgst_amount') + F('igst_amount')),
+            total=Sum('line_total'),
+            subtotal=Sum(
+                F('line_total') - F('cgst_amount') - F('sgst_amount') - F('igst_amount')
+            ),
+        )
+    )
+    allowed = {'bill_no', 'bill_date', 'supplier_name', 'total', 'lines', 'state',
+               'subtotal', 'gst'}
+    qs = apply_ordering(qs, f, allowed, '-bill_date')
+    return paginate_detail(request, qs)

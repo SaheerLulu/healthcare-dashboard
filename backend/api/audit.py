@@ -281,15 +281,17 @@ def anomalies(request):
         })
 
     # 5. Pipeline failures in last 24 h -----------------------------------
+    # The pipelines write 'partial' for runs with per-record failures
+    # ('error' is reserved for whole-run crashes recorded by callers).
     cutoff = today - timedelta(days=1)
     fail_count = PipelineLog.objects.filter(
-        last_run_at__date__gte=cutoff, status='error'
+        last_run_at__date__gte=cutoff, status__in=('partial', 'error')
     ).count() if PipelineLog.objects.exists() else 0
     if fail_count:
         items.append({
             'severity': 'high',
             'rule': 'pipeline_errors',
-            'subject': f"{fail_count} pipeline runs failed in the last 24h",
+            'subject': f"{fail_count} pipeline runs had failures in the last 24h",
             'detail': "See /pipeline for details and the unresolved error log.",
             'navigate': '/pipeline',
         })

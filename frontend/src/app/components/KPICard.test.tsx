@@ -61,3 +61,38 @@ describe('KPICard a11y', () => {
     expect(tile.getAttribute('aria-label')).toMatch(/vs last month/);
   });
 });
+
+describe('KPICard provenance (info prop)', () => {
+  it('info is optional — no provenance button without it', () => {
+    render(<KPICard title="Revenue" value="₹1Cr" />);
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('renders a popover with formula, source and notes when info is given', () => {
+    render(
+      <KPICard
+        title="Revenue"
+        value="₹1Cr"
+        info={{ formula: 'sum of line totals', source: 'report_sales', notes: 'B2B hours synthesized' }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'How is Revenue calculated?' }));
+    expect(screen.getByText('sum of line totals')).toBeInTheDocument();
+    expect(screen.getByText(/report_sales/)).toBeInTheDocument();
+    expect(screen.getByText(/B2B hours synthesized/)).toBeInTheDocument();
+  });
+
+  it('opening the popover does NOT trigger the card onClick (drill-through)', () => {
+    const onClick = vi.fn();
+    render(
+      <KPICard
+        title="Revenue"
+        value="₹1Cr"
+        onClick={onClick}
+        info={{ formula: 'f', source: 's' }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'How is Revenue calculated?' }));
+    expect(onClick).not.toHaveBeenCalled();
+  });
+});

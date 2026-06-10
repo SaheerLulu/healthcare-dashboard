@@ -5,22 +5,27 @@ from .permissions import DashboardPermission
 from rest_framework.response import Response
 from pipeline.inventory_pipeline import InventoryPipeline
 from pipeline.financial_pipeline import FinancialPipeline
+from pipeline.locking import PipelineLocked, pipeline_lock
 from pipeline.models import PipelineLog, PipelineError
 
-# Simple in-memory flag for pipeline running state
+# In-memory progress for THIS worker's UI polling. Cross-process mutual
+# exclusion (other gunicorn workers, cron's scheduled_pipeline, manual
+# management commands) comes from pipeline.locking's flock, acquired for
+# the duration of the background run.
 _pipeline_lock = threading.Lock()
 _pipeline_running = {'active': False, 'progress': '', 'result': None}
 
 
 def _run_pipeline_background(full=False):
-    """Run all pipelines in a background thread."""
+    """Run all pipelines in a background thread, holding the shared flock."""
     global _pipeline_running
     try:
-        _pipeline_running['progress'] = 'Running inventory pipeline...'
-        inv_results = InventoryPipeline().run_all(full=full)
+        with pipeline_lock():
+            _pipeline_running['progress'] = 'Running inventory pipeline...'
+            inv_results = InventoryPipeline().run_all(full=full)
 
-        _pipeline_running['progress'] = 'Running financial pipeline...'
-        fin_results = FinancialPipeline().run_all(full=full)
+            _pipeline_running['progress'] = 'Running financial pipeline...'
+            fin_results = FinancialPipeline().run_all(full=full)
 
         total = inv_results['total'] + fin_results['total']
         duration = round(inv_results['duration_seconds'] + fin_results['duration_seconds'], 2)
@@ -33,6 +38,12 @@ def _run_pipeline_background(full=False):
             'financial': fin_results,
         }
         _pipeline_running['progress'] = 'Complete'
+    except PipelineLocked:
+        _pipeline_running['result'] = {
+            'status': 'already_running',
+            'error': 'Another pipeline run (cron or CLI) is in progress.',
+        }
+        _pipeline_running['progress'] = 'Skipped — another run is in progress.'
     except Exception as e:
         _pipeline_running['result'] = {
             'status': 'error',

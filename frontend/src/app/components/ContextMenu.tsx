@@ -1,15 +1,22 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router';
-import { ArrowRight, Table2, Copy, X, Filter, ChevronRight } from 'lucide-react';
+import { ArrowRight, Table2, Copy, Filter, ChevronRight } from 'lucide-react';
 import { useCrossFilter } from '../contexts/CrossFilterContext';
+import { DrillFilter, buildDrillSearch } from '../utils/drill';
 
 interface ContextMenuProps {
   x: number;
   y: number;
   onClose: () => void;
+  /** Detail route, e.g. '/detail/sales'. */
   drillThroughTarget: string;
-  drillThroughContext?: any;
+  drillThroughContext?: { from: string; filters: DrillFilter[] };
+  /** Raw datum under the cursor (for Copy Data). */
   data?: any;
+  /** Dimension-aware filter for the clicked datum (for Add to Filters). */
+  filter?: DrillFilter | null;
+  /** Opens the visual's data table (provided by ChartCard). */
+  onShowDataTable?: () => void;
 }
 
 export const ContextMenu: React.FC<ContextMenuProps> = ({
@@ -19,6 +26,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   drillThroughTarget,
   drillThroughContext,
   data,
+  filter,
+  onShowDataTable,
 }) => {
   const navigate = useNavigate();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -68,28 +77,22 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     }
   }, [x, y]);
 
+  const ctx = drillThroughContext || { from: 'Dashboard', filters: [] };
+
   const handleDrillThrough = () => {
-    navigate(drillThroughTarget, {
-      state: {
-        drillThrough: drillThroughContext,
-      },
+    // URL params make the drill refresh/share-safe; state keeps it instant.
+    navigate(drillThroughTarget + buildDrillSearch(ctx.filters, ctx.from), {
+      state: { drillThrough: ctx },
     });
     onClose();
   };
 
-  const handleIncludeOnly = () => {
-    if (data) {
-      // Add as cross-filter
-      const filterLabel = Object.entries(data)
-        .filter(([key]) => key !== 'fill' && key !== 'payload')
-        .map(([key, value]) => `${key}: ${value}`)
-        .join(', ');
-      
-      addCrossFilter({
-        id: `filter-${Date.now()}`,
-        label: filterLabel,
-        value: data,
-      });
+  const handleAddToFilters = () => {
+    if (filter) {
+      // id == dimension so isFiltered(dimension, value) matches and the
+      // visual highlight + SelectionToolbar chip behave like a left-click
+      // selection.
+      addCrossFilter({ id: filter.id, label: filter.label, value: filter.value });
     }
     onClose();
   };
@@ -126,33 +129,35 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
       <div className="border-t border-gray-200 my-1" />
 
-      <button
-        onClick={handleIncludeOnly}
-        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-      >
-        <Filter className="w-4 h-4" />
-        <span>Add to Filters</span>
-      </button>
+      {filter && (
+        <button
+          onClick={handleAddToFilters}
+          className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          <Filter className="w-4 h-4" />
+          <span className="truncate">Filter: {filter.label}</span>
+        </button>
+      )}
 
-      <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
-        <Table2 className="w-4 h-4" />
-        <span>Show Data Table</span>
-      </button>
+      {onShowDataTable && (
+        <button
+          onClick={() => { onShowDataTable(); onClose(); }}
+          className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          <Table2 className="w-4 h-4" />
+          <span>Show Data Table</span>
+        </button>
+      )}
 
-      <div className="border-t border-gray-200 my-1" />
-
-      <button
-        onClick={handleCopyValue}
-        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-      >
-        <Copy className="w-4 h-4" />
-        <span>Copy Data</span>
-      </button>
-
-      <button className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors">
-        <X className="w-4 h-4" />
-        <span>Exclude from View</span>
-      </button>
+      {data && (
+        <button
+          onClick={handleCopyValue}
+          className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          <Copy className="w-4 h-4" />
+          <span>Copy Data</span>
+        </button>
+      )}
     </div>
   );
 };

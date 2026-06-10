@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { FilterProvider, useFilters } from './FilterContext';
+import { FilterProvider, useFilters, computeDateRange } from './FilterContext';
 
 // Mock the api module — useDashboardPrefs is imported by FilterProvider
 // and would otherwise hit the network in a jsdom environment.
@@ -17,6 +17,13 @@ const wrapper = ({ children }: { children: ReactNode }) => (
   <FilterProvider>{children}</FilterProvider>
 );
 
+/** Inclusive day span of a range, in whole days (start==end → 0). */
+const daySpan = (range: { start: string; end: string }) =>
+  Math.round(
+    (new Date(range.end).getTime() - new Date(range.start).getTime()) /
+      (1000 * 60 * 60 * 24),
+  );
+
 describe('FilterContext defaults', () => {
   beforeEach(() => {
     (api.get as any).mockClear();
@@ -24,11 +31,12 @@ describe('FilterContext defaults', () => {
     (api.patch as any).mockClear();
   });
 
-  it('starts with the Last 6 Months preset', async () => {
+  it('starts with the Rolling Month preset spanning the last 30 days', () => {
     const { result } = renderHook(() => useFilters(), { wrapper });
-    expect(result.current.filters.quickPreset).toBe('Last 6 Months');
+    expect(result.current.filters.quickPreset).toBe('Rolling Month');
     expect(result.current.filters.dateRange.start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(result.current.filters.dateRange.end).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(daySpan(result.current.filters.dateRange)).toBe(29);
   });
 
   it('financialYear is in the FY YYYY-YY format', () => {
@@ -42,6 +50,18 @@ describe('FilterContext defaults', () => {
     expect(result.current.filters.salesChannel).toEqual([]);
     expect(result.current.filters.productCategories).toEqual([]);
     expect(result.current.filters.paymentMethod).toEqual([]);
+  });
+});
+
+describe('computeDateRange', () => {
+  it("supports 'Rolling Month' as an alias of 'Last 30 Days'", () => {
+    expect(computeDateRange('Rolling Month')).toEqual(computeDateRange('Last 30 Days'));
+  });
+
+  it('falls back to the rolling month for unknown presets', () => {
+    expect(computeDateRange('Definitely Not A Preset')).toEqual(
+      computeDateRange('Rolling Month'),
+    );
   });
 });
 
@@ -61,10 +81,7 @@ describe('FilterContext.updateFilters', () => {
     act(() => {
       result.current.updateFilters({ quickPreset: 'Last 30 Days' });
     });
-    const start = new Date(result.current.filters.dateRange.start);
-    const end = new Date(result.current.filters.dateRange.end);
-    const diff = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-    expect(diff).toBe(29);
+    expect(daySpan(result.current.filters.dateRange)).toBe(29);
   });
 
   it('manual dateRange forces quickPreset = Custom', () => {
@@ -106,7 +123,7 @@ describe('FilterContext.updateFilters', () => {
       result.current.updateFilters({ locations: ['1', '2'] });
     });
     expect(result.current.filters.locations).toEqual(['1', '2']);
-    expect(result.current.filters.quickPreset).toBe('Last 6 Months'); // unchanged
+    expect(result.current.filters.quickPreset).toBe('Rolling Month'); // unchanged
   });
 });
 
@@ -125,46 +142,97 @@ describe('FilterContext.resetFilters', () => {
     act(() => {
       result.current.resetFilters();
     });
-    expect(result.current.filters.quickPreset).toBe('Last 6 Months');
+    expect(result.current.filters.quickPreset).toBe('Rolling Month');
+    expect(daySpan(result.current.filters.dateRange)).toBe(29);
     expect(result.current.filters.locations).toEqual([]);
     expect(result.current.filters.salesChannel).toEqual([]);
+  });
+});
+
+describe('FilterContext page filters', () => {
+  it('setPageFilter stores values per route and dimension', () => {
+    const { result } = renderHook(() => useFilters(), { wrapper });
+    act(() => {
+      result.current.setPageFilter('/sales', 'category', ['Tablets', 'Syrups']);
+      result.current.setPageFilter('/procurement', 'supplier_name', ['Acme Pharma']);
+    });
+    expect(result.current.pageFilters['/sales']).toEqual({ category: ['Tablets', 'Syrups'] });
+    expect(result.current.pageFilters['/procurement']).toEqual({ supplier_name: ['Acme Pharma'] });
+  });
+
+  it('setting an empty value list removes the dimension', () => {
+    const { result } = renderHook(() => useFilters(), { wrapper });
+    act(() => {
+      result.current.setPageFilter('/sales', 'category', ['Tablets']);
+    });
+    act(() => {
+      result.current.setPageFilter('/sales', 'category', []);
+    });
+    expect(result.current.pageFilters['/sales']).toEqual({});
+  });
+
+  it('clearPageFilters wipes only the given route', () => {
+    const { result } = renderHook(() => useFilters(), { wrapper });
+    act(() => {
+      result.current.setPageFilter('/sales', 'category', ['Tablets']);
+      result.current.setPageFilter('/gst', 'gst_rate', ['12']);
+    });
+    act(() => {
+      result.current.clearPageFilters('/sales');
+    });
+    expect(result.current.pageFilters['/sales']).toEqual({});
+    expect(result.current.pageFilters['/gst']).toEqual({ gst_rate: ['12'] });
   });
 });
 
 describe('FilterContext prefs integration', () => {
   beforeEach(() => {
     (api.get as any).mockClear();
+    (api.get as any).mockImplementation(() => Promise.resolve({ data: { prefs: {} } }));
     (api.patch as any).mockClear();
   });
 
-  it('hydrates default_quick_preset from /api/prefs/ on first load', async () => {
+  it('hydrates default_quick_preset_v2 from /api/prefs/ on first load', async () => {
     (api.get as any).mockResolvedValue({
-      data: { prefs: { default_quick_preset: 'Last 30 Days' } },
+      data: { prefs: { default_quick_preset_v2: 'Last 7 Days' } },
     });
     const { result } = renderHook(() => useFilters(), { wrapper });
 
     await waitFor(() => {
-      expect(result.current.filters.quickPreset).toBe('Last 30 Days');
+      expect(result.current.filters.quickPreset).toBe('Last 7 Days');
     });
   });
 
-  it('persists non-Custom preset choices via PATCH /api/prefs/', async () => {
+  it('ignores the legacy default_quick_preset key so the new default sticks', async () => {
+    (api.get as any).mockResolvedValue({
+      data: { prefs: { default_quick_preset: 'Last 6 Months' } },
+    });
+    const { result } = renderHook(() => useFilters(), { wrapper });
+    await waitFor(() => expect(api.get as any).toHaveBeenCalled());
+    // Flush the prefs-load promise + the hydration effect render.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.filters.quickPreset).toBe('Rolling Month');
+  });
+
+  it('persists non-Custom preset choices via PATCH under the v2 key', async () => {
     const { result } = renderHook(() => useFilters(), { wrapper });
     // Wait for the first prefs load to complete so hydratedRef is true
-    await waitFor(() => expect((api.get as any)).toHaveBeenCalled());
+    await waitFor(() => expect(api.get as any).toHaveBeenCalled());
 
     act(() => {
       result.current.updateFilters({ quickPreset: 'This Month' });
     });
 
     await waitFor(() => {
-      expect(api.patch).toHaveBeenCalledWith('/prefs/', { default_quick_preset: 'This Month' });
+      expect(api.patch).toHaveBeenCalledWith('/prefs/', { default_quick_preset_v2: 'This Month' });
     });
   });
 
   it('does NOT persist Custom (raw date range)', async () => {
     const { result } = renderHook(() => useFilters(), { wrapper });
-    await waitFor(() => expect((api.get as any)).toHaveBeenCalled());
+    await waitFor(() => expect(api.get as any).toHaveBeenCalled());
 
     (api.patch as any).mockClear();
     act(() => {

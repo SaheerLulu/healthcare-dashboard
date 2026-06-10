@@ -5,7 +5,20 @@ from .permissions import DashboardPermission
 from rest_framework.response import Response
 
 from reports.models import ReportSales, ReportInventory, ReportPurchases
-from .helpers import parse_filters, apply_common_filters
+from .helpers import (
+    parse_filters, apply_common_filters,
+    apply_dim_filters, apply_ordering, paginate_detail,
+)
+
+# Product page dimension → column (DRILLTHROUGH_DESIGN.md §1). Column names
+# are identical on ReportSales and the ReportInventory snapshot, so the same
+# mapping applies to both sources.
+PROD_DIMS = {
+    'company': 'product_company',
+    'molecule': 'product_molecule',
+    'product_id': 'product_id',
+    'product_name': 'product_name',
+}
 
 
 def _fmt_inr(value):
@@ -31,6 +44,7 @@ def overview(request):
         inv_qs = inv_qs.filter(location_id=f['location_id'])
     elif 'location_ids' in f:
         inv_qs = inv_qs.filter(location_id__in=f['location_ids'])
+    inv_qs = apply_dim_filters(inv_qs, f, PROD_DIMS)
 
     active_skus = inv_qs.filter(qty_on_hand__gt=0).values('product_id').distinct().count()
     fast_moving = inv_qs.filter(movement_status='fast').values('product_id').distinct().count()
@@ -38,7 +52,7 @@ def overview(request):
     portfolio_value = float(inv_qs.aggregate(total=Sum('stock_value_cost'))['total'] or 0)
 
     # Avg margin from sales
-    sales_qs = apply_common_filters(ReportSales.objects.all(), f)
+    sales_qs = apply_dim_filters(apply_common_filters(ReportSales.objects.all(), f), f, PROD_DIMS)
     avg_margin = float(sales_qs.aggregate(avg=Avg('margin_percent'))['avg'] or 0)
 
     return Response({
@@ -66,7 +80,7 @@ def lifecycle(request):
     """Classify products by lifecycle stage and aggregate counts per stage.
     The Pie chart on /product expects one slice per stage, not per product."""
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = apply_dim_filters(apply_common_filters(ReportSales.objects.all(), f), f, PROD_DIMS)
 
     products = list(
         qs.values('product_id', 'product_name', 'product_category')
@@ -124,7 +138,7 @@ def pricing(request):
         .annotate(avg_cost=Avg('purchase_rate'), avg_mrp=Avg('mrp'))
     }
 
-    sales_qs = apply_common_filters(ReportSales.objects.all(), f)
+    sales_qs = apply_dim_filters(apply_common_filters(ReportSales.objects.all(), f), f, PROD_DIMS)
     products = list(
         sales_qs.values('product_id', 'product_name', 'product_category')
         .annotate(
@@ -167,7 +181,9 @@ def substitutability(request):
     Molecules with empty / null are excluded so the report stays clean.
     """
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f).exclude(product_molecule='')
+    qs = apply_dim_filters(
+        apply_common_filters(ReportSales.objects.all(), f), f, PROD_DIMS
+    ).exclude(product_molecule='')
 
     # Per-molecule × per-brand revenue.
     rows = list(
@@ -231,20 +247,21 @@ def substitutability(request):
 @permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = apply_dim_filters(apply_common_filters(ReportSales.objects.all(), f), f, PROD_DIMS)
 
-    data = list(
-        qs.values(
-            'product_id', 'product_name', 'product_code',
-            'product_category', 'product_company', 'product_molecule',
-        )
-        .annotate(
-            revenue=Sum('line_total'),
-            qty=Sum('quantity'),
-            margin=Sum('gross_margin'),
-            avg_price=Avg('unit_price'),
-            orders=Count('source_id', distinct=True),
-        )
-        .order_by('-revenue')
+    qs = qs.values(
+        'product_id', 'product_name', 'product_code',
+        'product_category', 'product_company', 'product_molecule',
+    ).annotate(
+        revenue=Sum('line_total'),
+        qty=Sum('quantity'),
+        margin=Sum('gross_margin'),
+        avg_price=Avg('unit_price'),
+        orders=Count('source_id', distinct=True),
     )
-    return Response(data)
+    qs = apply_ordering(qs, f, allowed=(
+        'product_id', 'product_name', 'product_code',
+        'product_category', 'product_company', 'product_molecule',
+        'revenue', 'qty', 'margin', 'avg_price', 'orders',
+    ), default='-revenue')
+    return paginate_detail(request, qs)

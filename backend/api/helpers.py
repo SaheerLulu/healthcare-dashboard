@@ -1,6 +1,8 @@
 """Shared helpers for dashboard API views."""
 from datetime import date, timedelta
 
+from rest_framework.pagination import PageNumberPagination
+
 
 def prior_period_range(filters):
     """Same-duration window ending the day before start_date."""
@@ -28,6 +30,35 @@ def growth_pct(current, previous):
     if raw < -500:
         return -500.0
     return round(raw, 1)
+
+
+# ---------------------------------------------------------------------------
+# Dimension vocabulary (docs/DRILLTHROUGH_DESIGN.md §1).
+#
+# Every drill-through / page filter arrives as a query param named exactly
+# like the dimension id the frontend emits. Values are CSV for multi-select.
+# Parsed values are stored in the filters dict as LISTS under the param name
+# (the legacy category/channel/payment_method single-vs-plural duality is
+# kept for backward compatibility with existing call sites).
+# ---------------------------------------------------------------------------
+INT_CSV_DIMS = ('product_id', 'supplier_id', 'customer_id', 'doctor_id')
+STR_CSV_DIMS = (
+    'product_name', 'supplier_name', 'customer_name', 'doctor_name',
+    'customer_type', 'speciality', 'molecule', 'company',
+    'invoice_no', 'batch_no', 'month',
+    'state', 'voucher_type', 'account_type', 'account_subtype',
+    'account_name', 'party_type',
+    'invoice_type', 'filing_status', 'source_table',
+    'section', 'status', 'reason', 'return_type',
+    'expiry_status', 'expiry_bucket', 'movement_status',
+    'abc_class', 'ved_class', 'courier_partner',
+)
+NUM_CSV_DIMS = ('gst_rate',)
+BOOL_DIMS = ('is_return', 'reorder_needed')
+
+
+def _parse_csv(raw):
+    return [x.strip() for x in str(raw).split(',') if x.strip()]
 
 
 def parse_filters(request):
@@ -101,7 +132,113 @@ def parse_filters(request):
         else:
             filters['payment_method'] = payment_method
 
+    for dim in INT_CSV_DIMS:
+        raw = params.get(dim)
+        if raw:
+            vals = [int(x) for x in _parse_csv(raw) if x.lstrip('-').isdigit()]
+            if vals:
+                filters[dim] = vals
+    for dim in STR_CSV_DIMS:
+        raw = params.get(dim)
+        if raw:
+            vals = _parse_csv(raw)
+            if vals:
+                filters[dim] = vals
+    for dim in NUM_CSV_DIMS:
+        raw = params.get(dim)
+        if raw:
+            vals = []
+            for x in _parse_csv(raw):
+                try:
+                    vals.append(float(x))
+                except ValueError:
+                    pass
+            if vals:
+                filters[dim] = vals
+    for dim in BOOL_DIMS:
+        raw = params.get(dim)
+        if raw is not None and str(raw).lower() in ('true', 'false', '1', '0'):
+            filters[dim] = str(raw).lower() in ('true', '1')
+
+    ordering = params.get('ordering', '')
+    if ordering:
+        filters['ordering'] = ordering.strip()
+
     return filters
+
+
+# `expiry_bucket` values → days_to_expiry ranges (lower, upper); None = open.
+EXPIRY_BUCKETS = {
+    'expired': (None, -1),
+    'd0_30': (0, 30),
+    'd31_60': (31, 60),
+    'd61_90': (61, 90),
+    'd90_plus': (91, None),
+}
+
+
+def apply_dim_filters(qs, filters, mapping):
+    """Apply parsed dimension filters to a queryset.
+
+    `mapping` is {param_name: column_name}. List values use __in, booleans use
+    equality. `expiry_bucket` maps onto days_to_expiry ranges via
+    EXPIRY_BUCKETS (column value in the mapping must be 'days_to_expiry').
+    Params absent from the mapping or from filters are ignored, so it is safe
+    to pass every request's filters through any module's mapping.
+    """
+    from django.db.models import Q
+
+    for param, column in mapping.items():
+        if param not in filters:
+            continue
+        value = filters[param]
+        if param == 'expiry_bucket':
+            q = Q()
+            for bucket in value:
+                rng = EXPIRY_BUCKETS.get(bucket)
+                if not rng:
+                    continue
+                lo, hi = rng
+                cond = Q()
+                if lo is not None:
+                    cond &= Q(**{f'{column}__gte': lo})
+                if hi is not None:
+                    cond &= Q(**{f'{column}__lte': hi})
+                q |= cond
+            if q:
+                qs = qs.filter(q)
+        elif isinstance(value, list):
+            qs = qs.filter(**{f'{column}__in': value})
+        else:
+            qs = qs.filter(**{column: value})
+    return qs
+
+
+class DetailPagination(PageNumberPagination):
+    """Pagination for row-level drill-through endpoints.
+
+    Honors ?page= and ?page_size= (capped) so detail tables can page and
+    export without unbounded payloads.
+    """
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 500
+
+
+def apply_ordering(qs, filters, allowed, default):
+    """Apply a whitelisted ?ordering= column ('-' prefix = descending)."""
+    ordering = filters.get('ordering', '')
+    column = ordering.lstrip('-')
+    if column in allowed:
+        return qs.order_by(ordering)
+    return qs.order_by(default)
+
+
+def paginate_detail(request, qs):
+    """Paginate a values() queryset with the DetailPagination contract."""
+    paginator = DetailPagination()
+    page = paginator.paginate_queryset(qs, request)
+    return paginator.get_paginated_response(list(page) if page else [])
 
 
 def apply_common_filters(qs, filters, date_field='sale_date'):

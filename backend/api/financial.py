@@ -6,10 +6,44 @@ from django.db.models import Sum, Q
 from rest_framework.decorators import api_view, permission_classes
 from .permissions import DashboardPermission
 from rest_framework.response import Response
-from rest_framework.pagination import PageNumberPagination
 
 from reports.models import ReportFinancial, ReportSales
-from .helpers import parse_filters, apply_common_filters, apply_financial_filters
+from .helpers import (
+    parse_filters, apply_common_filters, apply_financial_filters,
+    apply_dim_filters, apply_ordering, paginate_detail,
+)
+
+# Financial page dimension → ReportFinancial column (DRILLTHROUGH_DESIGN.md §1)
+FIN_DIMS = {
+    'account_type': 'account_type',
+    'account_subtype': 'account_subtype',
+    'account_name': 'account_name',
+    'voucher_type': 'voucher_type',
+    'party_type': 'party_type',
+    'month': 'entry_month',
+}
+
+# Dims applicable to the ReportSales-sourced revenue sub-queries (pnl,
+# pnl-trend, profit-bridge intentionally source revenue from sales — see
+# comments in those views). Only `month` translates trivially.
+_SALES_DIMS = {'month': 'sale_month'}
+
+
+def _fin_qs(qs, f):
+    """apply_financial_filters + the financial page-dimension filters."""
+    return apply_dim_filters(apply_financial_filters(qs, f), f, FIN_DIMS)
+
+
+# P&L toplines mix a sales-sourced revenue leg with a journal-sourced expense
+# leg. Account-side dims (account_type/subtype/name, voucher_type, party_type)
+# cannot be applied to the sales leg, so applying them to expenses alone
+# inflates/deflates net profit. Topline P&L therefore honors only `month`
+# (the one dim both legs share); the expense-breakdown chart keeps full dims.
+_PNL_SAFE_DIMS = {'month': 'entry_month'}
+
+
+def _pnl_fin_qs(qs, f):
+    return apply_dim_filters(apply_financial_filters(qs, f), f, _PNL_SAFE_DIMS)
 
 
 _MONTH_SHORT = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -47,12 +81,13 @@ def _recent_months(start_date_iso, end_date_iso):
 @permission_classes([DashboardPermission])
 def pnl(request):
     f = parse_filters(request)
-    qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
+    qs = _pnl_fin_qs(ReportFinancial.objects.filter(is_posted=True), f)
 
     # Pull revenue + gross profit from ReportSales (the single source of truth
     # for sales). Using purchase-subtype ledger entries as COGS double-counts
     # inventory still on the shelves and produces nonsensical gross profit.
-    sales_qs = apply_common_filters(ReportSales.objects.all(), f)
+    sales_qs = apply_dim_filters(
+        apply_common_filters(ReportSales.objects.all(), f), f, _SALES_DIMS)
     sales_agg = sales_qs.aggregate(
         revenue=Sum('line_total'),
         gross_margin=Sum('gross_margin'),
@@ -79,7 +114,7 @@ def pnl(request):
 @permission_classes([DashboardPermission])
 def pnl_trend(request):
     f = parse_filters(request)
-    qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
+    qs = _pnl_fin_qs(ReportFinancial.objects.filter(is_posted=True), f)
 
     # Pull monthly revenue from ReportSales (single source of truth) — the
     # journal-entry-derived REVENUE rows tally to ~3.7× the actual sales
@@ -87,7 +122,8 @@ def pnl_trend(request):
     # netting against GST output and discounts. This caused the P&L trend
     # to show monthly Cumulative Loss while KPI cards on the same page read
     # +Profit.
-    sales_qs = apply_common_filters(ReportSales.objects.all(), f)
+    sales_qs = apply_dim_filters(
+        apply_common_filters(ReportSales.objects.all(), f), f, _SALES_DIMS)
     revenue_trend = {
         r['sale_month']: float(r['v'] or 0)
         for r in sales_qs.values('sale_month').annotate(v=Sum('line_total'))
@@ -124,7 +160,7 @@ def pnl_trend(request):
 @permission_classes([DashboardPermission])
 def expense_breakdown(request):
     f = parse_filters(request)
-    qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True, account_type='EXPENSE'), f)
+    qs = _fin_qs(ReportFinancial.objects.filter(is_posted=True, account_type='EXPENSE'), f)
 
     data = list(
         qs.values('account_name', 'account_code', 'account_subtype')
@@ -138,7 +174,7 @@ def expense_breakdown(request):
 @permission_classes([DashboardPermission])
 def balance_sheet(request):
     f = parse_filters(request)
-    qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
+    qs = _fin_qs(ReportFinancial.objects.filter(is_posted=True), f)
 
     assets = float(qs.filter(account_type='ASSET').aggregate(total=Sum('debit') - Sum('credit'))['total'] or 0)
     liabilities = float(qs.filter(account_type='LIABILITY').aggregate(total=Sum('credit') - Sum('debit'))['total'] or 0)
@@ -224,7 +260,7 @@ def cash_flow(request):
     """Cash-flow statement split into operating / investing / financing buckets,
     returned as both overall totals and a month-by-month trend."""
     f = parse_filters(request)
-    qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
+    qs = _fin_qs(ReportFinancial.objects.filter(is_posted=True), f)
 
     # Cash-touching lines (money actually moved in or out of Cash/Bank accounts)
     cash_qs = qs.filter(account_subtype__in=['Cash', 'Bank'])
@@ -301,7 +337,7 @@ def cash_flow(request):
 def ratios(request):
     """Financial ratios — returns current values plus a month-by-month trend."""
     f = parse_filters(request)
-    qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
+    qs = _fin_qs(ReportFinancial.objects.filter(is_posted=True), f)
 
     def _agg(q, field_a, field_b):
         return float(q.aggregate(t=Sum(field_a) - Sum(field_b))['t'] or 0)
@@ -383,9 +419,10 @@ def ratios(request):
 @permission_classes([DashboardPermission])
 def profit_bridge(request):
     f = parse_filters(request)
-    qs = apply_financial_filters(ReportFinancial.objects.filter(is_posted=True), f)
+    qs = _pnl_fin_qs(ReportFinancial.objects.filter(is_posted=True), f)
 
-    sales_qs = apply_common_filters(ReportSales.objects.all(), f)
+    sales_qs = apply_dim_filters(
+        apply_common_filters(ReportSales.objects.all(), f), f, _SALES_DIMS)
     sales_agg = sales_qs.aggregate(
         revenue=Sum('line_total'),
         gross_margin=Sum('gross_margin'),
@@ -426,28 +463,26 @@ def profit_bridge(request):
 @permission_classes([DashboardPermission])
 def expense_detail(request):
     f = parse_filters(request)
-    qs = apply_financial_filters(
-        ReportFinancial.objects.filter(is_posted=True, account_type='EXPENSE'), f
-    ).order_by('-entry_date').values(
+    columns = (
         'entry_date', 'account_name', 'narration', 'debit',
         'party_name', 'voucher_type',
     )
-
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    return paginator.get_paginated_response(list(page) if page else [])
+    qs = _fin_qs(
+        ReportFinancial.objects.filter(is_posted=True, account_type='EXPENSE'), f
+    ).values(*columns)
+    qs = apply_ordering(qs, f, allowed=columns, default='-entry_date')
+    return paginate_detail(request, qs)
 
 
 @api_view(['GET'])
 @permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
-    qs = apply_financial_filters(ReportFinancial.objects.all(), f).order_by('-entry_date').values(
+    columns = (
         'entry_date', 'entry_no', 'voucher_type', 'account_code',
         'account_name', 'account_type', 'debit', 'credit', 'narration',
         'party_name', 'location_name',
     )
-
-    paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(qs, request)
-    return paginator.get_paginated_response(list(page) if page else [])
+    qs = _fin_qs(ReportFinancial.objects.all(), f).values(*columns)
+    qs = apply_ordering(qs, f, allowed=columns, default='-entry_date')
+    return paginate_detail(request, qs)

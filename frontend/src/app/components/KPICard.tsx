@@ -1,5 +1,11 @@
-import React, { ReactNode } from 'react';
-import { ArrowUp, ArrowDown } from 'lucide-react';
+import React, { ReactNode, useState } from 'react';
+import { ArrowUp, ArrowDown, Info, X } from 'lucide-react';
+
+interface KPIInfo {
+  formula: string;
+  source: string;
+  notes?: string;
+}
 
 interface KPICardProps {
   title: string;
@@ -13,6 +19,8 @@ interface KPICardProps {
   icon?: ReactNode;
   onClick?: () => void;
   className?: string;
+  /** Provenance — "how is this achieved" popover. */
+  info?: KPIInfo;
 }
 
 export const KPICard: React.FC<KPICardProps> = ({
@@ -24,7 +32,9 @@ export const KPICard: React.FC<KPICardProps> = ({
   icon,
   onClick,
   className = '',
+  info,
 }) => {
+  const [infoOpen, setInfoOpen] = useState(false);
   // a11y: when the card is clickable it becomes a button (DASH-E00-A06).
   // Keyboard activation via Enter/Space mirrors native button semantics so
   // screen-reader users get the same drill-through P-OWN gets with a click.
@@ -61,11 +71,56 @@ export const KPICard: React.FC<KPICardProps> = ({
       }}
     >
       <div className="flex items-start justify-between mb-2">
-        <div
-          className="text-xs font-semibold uppercase tracking-wider"
-          style={{ color: 'var(--ink-2)' }}
-        >
-          {title}
+        <div className="flex items-center gap-1 min-w-0">
+          <div
+            className="text-xs font-semibold uppercase tracking-wider truncate"
+            style={{ color: 'var(--ink-2)' }}
+          >
+            {title}
+          </div>
+          {info && (
+            <div className="relative flex-shrink-0">
+              <button
+                aria-label={`How is ${title} calculated?`}
+                title="How is this calculated?"
+                onClick={(e) => { e.stopPropagation(); setInfoOpen(o => !o); }}
+                onKeyDown={(e) => e.stopPropagation()}
+                className="p-0.5 rounded transition-colors"
+                style={{ color: 'var(--ink-3)' }}
+              >
+                <Info className="w-3 h-3" />
+              </button>
+              {infoOpen && (
+                <div
+                  className="absolute left-0 top-full mt-1 w-72 rounded-lg shadow-xl z-[60] p-3.5 text-xs text-left cursor-default dropdown-animate"
+                  style={{ backgroundColor: 'var(--surface-0)', border: '1px solid var(--line)' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-start justify-between gap-2 mb-1.5">
+                    <span className="font-semibold uppercase tracking-wider text-[10px]" style={{ color: 'var(--ink-3)' }}>
+                      How this is calculated
+                    </span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setInfoOpen(false); }}
+                      aria-label="Close info"
+                      style={{ color: 'var(--ink-3)' }}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <p className="mb-1.5 normal-case font-normal tracking-normal" style={{ color: 'var(--ink)' }}>{info.formula}</p>
+                  <p className="normal-case font-normal tracking-normal" style={{ color: 'var(--ink-2)' }}>
+                    <span className="font-medium">Source:</span> {info.source}
+                  </p>
+                  {info.notes && (
+                    <p className="mt-1.5 pt-1.5 normal-case font-normal tracking-normal" style={{ color: 'var(--ink-3)', borderTop: '1px solid var(--line)' }}>
+                      ⚠ {info.notes}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         {icon && (
           <div className="opacity-70" style={{ color: 'var(--brand)' }}>

@@ -85,7 +85,7 @@ WSGI_APPLICATION = 'dashboard_project.wsgi.application'
 #   - Default: shared SQLite with healthcare-inventory-management & accounting.
 #   - Production: PostgreSQL when DJANGO_DB_ENGINE=postgresql (DASH-E20-F03-US02).
 # ---------------------------------------------------------------------------
-_DEFAULT_SHARED_DB = (BASE_DIR.parent.parent / 'healthcare' / 'backend' / 'db.sqlite3').resolve()
+_DEFAULT_SHARED_DB = (BASE_DIR.parent.parent / 'healthcare-pharmacy' / 'backend' / 'db.sqlite3').resolve()
 _DB_ENGINE = os.environ.get('DJANGO_DB_ENGINE', 'sqlite3').lower()
 
 if _DB_ENGINE in ('postgres', 'postgresql', 'pg'):

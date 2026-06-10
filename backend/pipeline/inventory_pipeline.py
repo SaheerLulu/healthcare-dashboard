@@ -181,23 +181,88 @@ def _resolve_error(pipeline_type, source_id):
     ).update(resolved=True)
 
 
+def _unresolved_ids(pipeline_type):
+    """Source ids of unresolved PipelineError rows for a pipeline type."""
+    return list(
+        PipelineError.objects
+        .filter(pipeline_type=pipeline_type, resolved=False)
+        .values_list('source_id', flat=True)
+        .distinct()
+    )
+
+
+def _retry_q(since_id, retry_ids):
+    """Incremental window plus previously-failed source ids."""
+    q = Q(id__gt=since_id)
+    if retry_ids:
+        q |= Q(id__in=retry_ids)
+    return q
+
+
+def _sweep_vanished_retries(specs):
+    """Resolve queued retries whose source row no longer exists or no longer
+    qualifies upstream — otherwise they would sit unresolved forever, get
+    re-attempted every run, and keep the dashboard's unresolved-error alert
+    permanently stuck. `specs` = [(pipeline_type, qualified_source_qs), ...].
+    """
+    for ptype, qualified_qs in specs:
+        ids = _unresolved_ids(ptype)
+        if not ids:
+            continue
+        valid = set(qualified_qs.filter(id__in=ids).values_list('id', flat=True))
+        vanished = set(ids) - valid
+        if vanished:
+            PipelineError.objects.filter(
+                pipeline_type=ptype, source_id__in=vanished, resolved=False,
+            ).update(resolved=True)
+
+
+def _finalize_log(pipeline_type, last_id, count, errors=0, last_error=''):
+    """Write the per-type PipelineLog honestly: 'partial' when any record
+    failed during this run, 'success' only when error-free."""
+    status = 'success' if not errors else 'partial'
+    PipelineLog.objects.update_or_create(
+        pipeline_type=pipeline_type,
+        defaults={
+            'last_synced_id': last_id,
+            'records_processed': count,
+            'status': status,
+            'error_message': last_error if errors else '',
+        },
+    )
+    return status
+
+
 class InventoryPipeline:
+
+    def __init__(self):
+        self.total_errors = 0
 
     def sync_pos_sales(self, since_id=0):
         """Sync POS sales orders into report_sales."""
+        retry_ids = _unresolved_ids('pos_sales')
+        if retry_ids:
+            # Drop any partial rows from the failed attempt to avoid dupes.
+            ReportSales.objects.filter(
+                source_type='pos', source_id__in=retry_ids,
+            ).delete()
+
         orders = (
             POSOrderRO.objects
-            .filter(id__gt=since_id, status__in=['confirmed', 'completed'])
+            .filter(_retry_q(since_id, retry_ids), status__in=['confirmed', 'completed'])
             .select_related('customer', 'location', 'doctor')
             .order_by('id')
         )
 
         count = 0
+        errors = 0
+        last_error = ''
         last_id = since_id
         batch = []
 
         for order in orders.iterator():
             try:
+                mark = len(batch)
                 lines = POSOrderLineRO.objects.filter(
                     pos_order_id=order.id
                 ).select_related('product')
@@ -290,40 +355,52 @@ class InventoryPipeline:
                     count += 1
 
                 _resolve_error('pos_sales', order.id)
-                last_id = order.id
+                last_id = max(last_id, order.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportSales.objects.bulk_create(batch)
                     batch = []
 
             except Exception as e:
+                # Drop this record's partially-appended lines so a
+                # mid-record failure never flushes a partial document.
+                del batch[mark:]
+                errors += 1
+                last_error = str(e)
                 _log_error('pos_sales', order.id, e)
 
         if batch:
             ReportSales.objects.bulk_create(batch)
 
-        PipelineLog.objects.update_or_create(
-            pipeline_type='pos_sales',
-            defaults={'last_synced_id': last_id, 'records_processed': count, 'status': 'success'},
-        )
+        self.total_errors += errors
+        _finalize_log('pos_sales', last_id, count, errors, last_error)
         logger.info("POS sales synced: %d records, last_id=%d", count, last_id)
         return count
 
     def sync_b2b_sales(self, since_id=0):
         """Sync B2B sales orders into report_sales."""
+        retry_ids = _unresolved_ids('b2b_sales')
+        if retry_ids:
+            ReportSales.objects.filter(
+                source_type='b2b', source_id__in=retry_ids,
+            ).delete()
+
         orders = (
             B2BSalesOrderRO.objects
-            .filter(id__gt=since_id, status__in=['confirmed', 'delivered', 'invoiced'])
+            .filter(_retry_q(since_id, retry_ids), status__in=['confirmed', 'delivered', 'invoiced'])
             .select_related('customer', 'location')
             .order_by('id')
         )
 
         count = 0
+        errors = 0
+        last_error = ''
         last_id = since_id
         batch = []
 
         for order in orders.iterator():
             try:
+                mark = len(batch)
                 lines = B2BSalesOrderLineRO.objects.filter(
                     sales_order_id=order.id
                 ).select_related('product')
@@ -384,40 +461,50 @@ class InventoryPipeline:
                     count += 1
 
                 _resolve_error('b2b_sales', order.id)
-                last_id = order.id
+                last_id = max(last_id, order.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportSales.objects.bulk_create(batch)
                     batch = []
 
             except Exception as e:
+                # Drop this record's partially-appended lines so a
+                # mid-record failure never flushes a partial document.
+                del batch[mark:]
+                errors += 1
+                last_error = str(e)
                 _log_error('b2b_sales', order.id, e)
 
         if batch:
             ReportSales.objects.bulk_create(batch)
 
-        PipelineLog.objects.update_or_create(
-            pipeline_type='b2b_sales',
-            defaults={'last_synced_id': last_id, 'records_processed': count, 'status': 'success'},
-        )
+        self.total_errors += errors
+        _finalize_log('b2b_sales', last_id, count, errors, last_error)
         logger.info("B2B sales synced: %d records, last_id=%d", count, last_id)
         return count
 
     def sync_sales_returns(self, since_id=0):
         """Sync sales returns into report_sales_returns."""
+        retry_ids = _unresolved_ids('sales_returns')
+        if retry_ids:
+            ReportSalesReturns.objects.filter(source_id__in=retry_ids).delete()
+
         returns = (
             SalesReturnRO.objects
-            .filter(id__gt=since_id, status__in=['confirmed', 'completed'])
+            .filter(_retry_q(since_id, retry_ids), status__in=['confirmed', 'completed'])
             .select_related('customer', 'location', 'original_order', 'original_b2b_order')
             .order_by('id')
         )
 
         count = 0
+        errors = 0
+        last_error = ''
         last_id = since_id
         batch = []
 
         for ret in returns.iterator():
             try:
+                mark = len(batch)
                 lines = SalesReturnLineRO.objects.filter(
                     sales_return_id=ret.id
                 ).select_related('product')
@@ -469,40 +556,52 @@ class InventoryPipeline:
                     count += 1
 
                 _resolve_error('sales_returns', ret.id)
-                last_id = ret.id
+                last_id = max(last_id, ret.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportSalesReturns.objects.bulk_create(batch)
                     batch = []
 
             except Exception as e:
+                # Drop this record's partially-appended lines so a
+                # mid-record failure never flushes a partial document.
+                del batch[mark:]
+                errors += 1
+                last_error = str(e)
                 _log_error('sales_returns', ret.id, e)
 
         if batch:
             ReportSalesReturns.objects.bulk_create(batch)
 
-        PipelineLog.objects.update_or_create(
-            pipeline_type='sales_returns',
-            defaults={'last_synced_id': last_id, 'records_processed': count, 'status': 'success'},
-        )
+        self.total_errors += errors
+        _finalize_log('sales_returns', last_id, count, errors, last_error)
         logger.info("Sales returns synced: %d records, last_id=%d", count, last_id)
         return count
 
     def sync_purchases(self, since_id=0):
         """Sync purchase orders into report_purchases."""
+        retry_ids = _unresolved_ids('purchases')
+        if retry_ids:
+            ReportPurchases.objects.filter(
+                is_return=False, source_id__in=retry_ids,
+            ).delete()
+
         orders = (
             PurchaseOrderRO.objects
-            .filter(id__gt=since_id, state__in=['confirmed', 'done', 'approved'])
+            .filter(_retry_q(since_id, retry_ids), state__in=['confirmed', 'done', 'approved'])
             .select_related('supplier', 'location')
             .order_by('id')
         )
 
         count = 0
+        errors = 0
+        last_error = ''
         last_id = since_id
         batch = []
 
         for order in orders.iterator():
             try:
+                mark = len(batch)
                 lines = PurchaseOrderLineRO.objects.filter(
                     purchase_order_id=order.id
                 ).select_related('product')
@@ -586,40 +685,52 @@ class InventoryPipeline:
                     count += 1
 
                 _resolve_error('purchases', order.id)
-                last_id = order.id
+                last_id = max(last_id, order.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportPurchases.objects.bulk_create(batch)
                     batch = []
 
             except Exception as e:
+                # Drop this record's partially-appended lines so a
+                # mid-record failure never flushes a partial document.
+                del batch[mark:]
+                errors += 1
+                last_error = str(e)
                 _log_error('purchases', order.id, e)
 
         if batch:
             ReportPurchases.objects.bulk_create(batch)
 
-        PipelineLog.objects.update_or_create(
-            pipeline_type='purchases',
-            defaults={'last_synced_id': last_id, 'records_processed': count, 'status': 'success'},
-        )
+        self.total_errors += errors
+        _finalize_log('purchases', last_id, count, errors, last_error)
         logger.info("Purchases synced: %d records, last_id=%d", count, last_id)
         return count
 
     def sync_purchase_returns(self, since_id=0):
         """Sync purchase returns into report_purchases with is_return=True."""
+        retry_ids = _unresolved_ids('purchase_returns')
+        if retry_ids:
+            ReportPurchases.objects.filter(
+                is_return=True, source_id__in=retry_ids,
+            ).delete()
+
         returns = (
             PurchaseReturnRO.objects
-            .filter(id__gt=since_id, status__in=['confirmed', 'completed', 'approved'])
+            .filter(_retry_q(since_id, retry_ids), status__in=['confirmed', 'completed', 'approved'])
             .select_related('supplier', 'location')
             .order_by('id')
         )
 
         count = 0
+        errors = 0
+        last_error = ''
         last_id = since_id
         batch = []
 
         for ret in returns.iterator():
             try:
+                mark = len(batch)
                 lines = PurchaseReturnLineRO.objects.filter(
                     purchase_return_id=ret.id
                 ).select_related('product')
@@ -683,22 +794,25 @@ class InventoryPipeline:
                     count += 1
 
                 _resolve_error('purchase_returns', ret.id)
-                last_id = ret.id
+                last_id = max(last_id, ret.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportPurchases.objects.bulk_create(batch)
                     batch = []
 
             except Exception as e:
+                # Drop this record's partially-appended lines so a
+                # mid-record failure never flushes a partial document.
+                del batch[mark:]
+                errors += 1
+                last_error = str(e)
                 _log_error('purchase_returns', ret.id, e)
 
         if batch:
             ReportPurchases.objects.bulk_create(batch)
 
-        PipelineLog.objects.update_or_create(
-            pipeline_type='purchase_returns',
-            defaults={'last_synced_id': last_id, 'records_processed': count, 'status': 'success'},
-        )
+        self.total_errors += errors
+        _finalize_log('purchase_returns', last_id, count, errors, last_error)
         logger.info("Purchase returns synced: %d records, last_id=%d", count, last_id)
         return count
 
@@ -904,6 +1018,15 @@ class InventoryPipeline:
     def run_all(self, full=False):
         """Run all inventory pipeline steps."""
         start = time.time()
+        self.total_errors = 0
+
+        _sweep_vanished_retries([
+            ('pos_sales', POSOrderRO.objects.filter(status__in=['confirmed', 'completed'])),
+            ('b2b_sales', B2BSalesOrderRO.objects.filter(status__in=['confirmed', 'delivered', 'invoiced'])),
+            ('sales_returns', SalesReturnRO.objects.filter(status__in=['confirmed', 'completed'])),
+            ('purchases', PurchaseOrderRO.objects.filter(state__in=['confirmed', 'done', 'approved'])),
+            ('purchase_returns', PurchaseReturnRO.objects.filter(status__in=['confirmed', 'completed', 'approved'])),
+        ])
 
         if full:
             logger.info("Full inventory pipeline refresh – clearing existing data")
@@ -932,12 +1055,16 @@ class InventoryPipeline:
         total = sum(results.values())
         results['total'] = total
         results['duration_seconds'] = round(duration, 2)
+        results['errors'] = self.total_errors
 
         PipelineLog.objects.create(
             pipeline_type='inventory_all',
             last_synced_id=0,
             records_processed=total,
-            status='success',
+            status='success' if self.total_errors == 0 else 'partial',
+            error_message='' if self.total_errors == 0 else (
+                f'{self.total_errors} record(s) failed; see pipeline_error'
+            ),
             duration_seconds=duration,
         )
 

@@ -1,4 +1,4 @@
-import { User, Database, FileText } from 'lucide-react';
+import { User, Database, FileText, Bell, Shield, Download } from 'lucide-react';
 import { NavLink } from 'react-router';
 
 export const Settings = () => {

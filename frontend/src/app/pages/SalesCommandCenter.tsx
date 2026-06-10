@@ -1,11 +1,11 @@
-import { useState, MouseEvent } from 'react';
-import { useNavigate } from 'react-router';
+import { useState } from 'react';
 import { KPICard } from '../components/KPICard';
 import { ChartCard } from '../components/ChartCard';
-import { ContextMenu } from '../components/ContextMenu';
 import { useCrossFilter } from '../contexts/CrossFilterContext';
+import { DrillSource } from '../contexts/DrillSourceContext';
+import { useDrillThrough } from '../hooks/useDrillThrough';
+import { DrillFilter, monthOf } from '../utils/drill';
 import {
-  LineChart,
   Line,
   BarChart,
   Bar,
@@ -35,23 +35,39 @@ import { toMonthlyTrend, toTopProducts, toPaymentMix, toHourlySales, toCustomers
 import { formatIndianCurrencyAbbreviated } from '../utils/formatters';
 
 const COLORS = ['#0D9488', '#4F46E5', '#F59E0B', '#EF4444', '#10B981', '#8B5CF6', '#EC4899'];
-const TEAL = '#0D9488';
 
-export const SalesCommandCenter = () => {
+/** Cross-filter dimension id → backend drill param (docs/DRILLTHROUGH_DESIGN.md §1). */
+const DIM_TO_PARAM: Record<string, string> = {
+  product: 'product_name',
+  supplier: 'supplier_name',
+  customer: 'customer_name',
+  doctor: 'doctor_name',
+  speciality: 'speciality',
+  month: 'month',
+  category: 'category',
+  paymentMethod: 'payment_method',
+  rate: 'gst_rate',
+  returnReason: 'reason',
+  reason: 'reason',
+  segment: 'customer_type',
+  tier: 'customer_type',
+};
+
+const money = (v: any) => formatIndianCurrencyAbbreviated(Number(v) || 0);
+
+/** COGS honesty note shared by every margin/profit visual on this page. */
+const COGS_NOTE = 'COGS is estimated as unit_price × 0.7 when the purchase rate is missing in source (pipeline estimate); margins/profit are approximate.';
+
+export const SalesCommandCenter = () => (
+  <DrillSource name="Sales Command Center">
+    <SalesCommandCenterContent />
+  </DrillSource>
+);
+
+const SalesCommandCenterContent = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'product' | 'customer' | 'doctor' | 'returns'>('overview');
-  const navigate = useNavigate();
   const { toggleCrossFilter, activeFilters, isFiltered } = useCrossFilter();
-  const [contextMenu, setContextMenu] = useState<{
-    visible: boolean;
-    x: number;
-    y: number;
-    page: string;
-  }>({
-    visible: false,
-    x: 0,
-    y: 0,
-    page: '',
-  });
+  const { drillTo, openContextMenu, contextMenuElement } = useDrillThrough();
 
   // API integration
   const { data: apiOverview } = useApiData<any>('/sales/overview/', { kpis: {}, daily_trend: [], monthly_trend: [] });
@@ -157,6 +173,42 @@ export const SalesCommandCenter = () => {
   }));
   const returnImpactData = apiReturnImpact;
 
+  // Month chart labels ('Mar') → raw 'YYYY-MM', rebuilt page-locally from the
+  // raw API rows because the chart transforms keep only the short label.
+  const monthLabelToRaw: Record<string, string> = {};
+  for (const r of [
+    ...(apiOverview.monthly_trend || []),
+    ...(apiCustomerGrowth || []),
+    ...(apiDoctorPrescriptionTrend || []),
+    ...(apiReturns.trend || []),
+  ]) {
+    const raw = monthOf(r);
+    if (raw) monthLabelToRaw[monthLabel(raw)] = raw;
+  }
+
+  /** Active cross-filters translated to backend drill params (design doc §1). */
+  const crossFiltersAsDrillFilters = (): DrillFilter[] =>
+    activeFilters.flatMap((f) => {
+      const id = DIM_TO_PARAM[f.id];
+      if (!id) return [];
+      let value = Array.isArray(f.value) ? f.value.join(',') : String(f.value);
+      if (id === 'month') {
+        const raw = /^\d{4}-\d{2}/.test(value) ? value.slice(0, 7) : monthLabelToRaw[value];
+        if (!raw) return [];
+        value = raw;
+      }
+      return [{ id, label: f.label, value }];
+    });
+
+  /** Entity filters first, then the page's active cross-filters (deduped by id). */
+  const withCrossFilters = (extra: DrillFilter[] = []): DrillFilter[] => [
+    ...extra,
+    ...crossFiltersAsDrillFilters().filter((cf) => !extra.some((e) => e.id === cf.id)),
+  ];
+
+  const rowFilters = (id: string, label: string, value: string): DrillFilter[] =>
+    withCrossFilters([{ id, label: `${label}: ${value}`, value }]);
+
   // Left-click: toggle cross-filter (select/deselect)
   const handleChartSelect = (data: any, dimension: string) => {
     if (data && data.activePayload && data.activePayload[0]) {
@@ -166,25 +218,6 @@ export const SalesCommandCenter = () => {
         toggleCrossFilter({ id: dimension, label: `${dimension}: ${val}`, value: val });
       }
     }
-  };
-
-  // Right-click: context menu for drill-through
-  const handleChartRightClick = (e: MouseEvent, page: string) => {
-    e.preventDefault();
-    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, page });
-  };
-
-  const closeContextMenu = () => setContextMenu(prev => ({ ...prev, visible: false }));
-
-  const handleDrillThrough = (page: string, filter?: any) => {
-    navigate(page, {
-      state: {
-        drillThrough: {
-          from: 'Sales Command Center',
-          filters: filter ? [filter] : activeFilters.length > 0 ? activeFilters : [],
-        },
-      },
-    });
   };
 
   const hasFilter = (dimension: string) => activeFilters.some(f => f.id === dimension);
@@ -231,27 +264,49 @@ export const SalesCommandCenter = () => {
           <span className="text-xs text-gray-500 ml-auto">How sales performance translates to profit</span>
         </div>
         <div className="grid grid-cols-6 gap-3">
-          <div className="bg-white rounded-lg p-3 border border-teal-100">
+          <div
+            className="bg-white rounded-lg p-3 border border-teal-100 cursor-context-menu"
+            onContextMenu={(e) => openContextMenu(e, '/detail/sales', withCrossFilters(), kpis)}
+          >
             <div className="text-[10px] text-gray-500 mb-1">Revenue</div>
             <div className="text-sm font-bold text-teal-700">{formatIndianCurrencyAbbreviated(kpis.total_revenue || 0)}</div>
             <div className="text-[10px] text-green-600">↑ {kpis.revenue_growth_pct ?? 0}% vs prev</div>
           </div>
-          <div className="bg-white rounded-lg p-3 border border-gray-100">
+          <div
+            className="bg-white rounded-lg p-3 border border-gray-100 cursor-context-menu"
+            onContextMenu={(e) => openContextMenu(e, '/detail/sales', withCrossFilters(), kpis)}
+          >
             <div className="text-[10px] text-gray-500 mb-1">COGS ({kpis.cogs_pct ?? 0}%)</div>
             <div className="text-sm font-bold text-gray-700">{formatIndianCurrencyAbbreviated(kpis.cogs || 0)}</div>
             <div className="text-[10px] text-red-500">↑ {kpis.cogs_growth_pct ?? 0}% vs prev</div>
           </div>
-          <div className="bg-white rounded-lg p-3 border border-green-100">
+          <div
+            className="bg-white rounded-lg p-3 border border-green-100 cursor-context-menu"
+            onContextMenu={(e) => openContextMenu(e, '/detail/sales', withCrossFilters(), kpis)}
+          >
             <div className="text-[10px] text-gray-500 mb-1">Gross Profit</div>
             <div className="text-sm font-bold text-green-700">{formatIndianCurrencyAbbreviated(kpis.gross_profit || 0)}</div>
             <div className="text-[10px] text-amber-500">Margin: {kpis.gross_margin_pct ?? 0}%</div>
           </div>
-          <div className="bg-white rounded-lg p-3 border border-amber-100">
+          <div
+            className="bg-white rounded-lg p-3 border border-amber-100 cursor-context-menu"
+            onContextMenu={(e) => openContextMenu(e, '/detail/sales-returns', withCrossFilters(), returnsKpis)}
+          >
             <div className="text-[10px] text-gray-500 mb-1">Returns Impact</div>
             <div className="text-sm font-bold text-red-600">{kpis.returns_impact ? `-${formatIndianCurrencyAbbreviated(Math.abs(kpis.returns_impact))}` : '-'}</div>
             <div className="text-[10px] text-red-500">{returnsKpis.total_returns ?? 0} items returned</div>
           </div>
-          <div className="bg-white rounded-lg p-3 border border-indigo-100">
+          <div
+            className="bg-white rounded-lg p-3 border border-indigo-100 cursor-context-menu"
+            onContextMenu={(e) => openContextMenu(
+              e,
+              '/detail/sales',
+              kpis.top_margin_product
+                ? rowFilters('product_name', 'Product', kpis.top_margin_product)
+                : withCrossFilters(),
+              kpis,
+            )}
+          >
             <div className="text-[10px] text-gray-500 mb-1">Top Margin Product</div>
             <div className="text-sm font-bold text-indigo-700">{kpis.top_margin_product || '-'}</div>
             <div className="text-[10px] text-green-600">
@@ -259,7 +314,10 @@ export const SalesCommandCenter = () => {
               {(kpis.top_margin_product_growth ?? 0) !== 0 ? ` · ${kpis.top_margin_product_growth > 0 ? '↑' : '↓'} ${Math.abs(kpis.top_margin_product_growth)}%` : ''}
             </div>
           </div>
-          <div className="bg-white rounded-lg p-3 border border-green-100">
+          <div
+            className="bg-white rounded-lg p-3 border border-green-100 cursor-context-menu"
+            onContextMenu={(e) => openContextMenu(e, '/detail/sales', withCrossFilters(), kpis)}
+          >
             <div className="text-[10px] text-gray-500 mb-1">Net Profit</div>
             <div className="text-sm font-bold text-green-700">{formatIndianCurrencyAbbreviated(kpis.net_profit || 0)}</div>
             <div className="text-[10px] text-gray-500">Margin: {kpis.net_margin_pct ?? 0}%</div>
@@ -294,31 +352,56 @@ export const SalesCommandCenter = () => {
               value={formatIndianCurrencyAbbreviated(kpis.today_revenue || 0)}
               subtitle={`${kpis.today_orders ?? 0} Orders`}
               trend={{ value: `${kpis.today_revenue_growth_pct ?? 0}%`, direction: (kpis.today_revenue_growth_pct ?? 0) >= 0 ? 'up' : 'down' }}
-              onClick={() => handleDrillThrough('/detail/sales')}
+              onClick={() => drillTo('/detail/sales', withCrossFilters())}
+              info={{
+                formula: 'Σ line totals of today\'s orders; orders = distinct invoices today. Growth vs yesterday.',
+                source: 'report_sales — POS + B2B order lines (/sales/overview/)',
+              }}
             />
             <KPICard
               title="MTD Revenue"
               value={formatIndianCurrencyAbbreviated(kpis.total_revenue || 0)}
               subtitle={`${(kpis.total_orders ?? 0).toLocaleString('en-IN')} Orders`}
               trend={{ value: `${kpis.revenue_growth_pct ?? 0}%`, direction: (kpis.revenue_growth_pct ?? 0) >= 0 ? 'up' : 'down' }}
+              onClick={() => drillTo('/detail/sales', withCrossFilters())}
+              info={{
+                formula: 'Σ revenue over the selected period; growth vs the previous equal-length period.',
+                source: 'report_sales — POS + B2B order lines (/sales/overview/)',
+              }}
             />
             <KPICard
               title="Avg Basket Size"
               value={formatIndianCurrencyAbbreviated(kpis.avg_order_value || 0)}
               subtitle="Today's Average"
               trend={{ value: `${kpis.avg_basket_growth_pct ?? 0}%`, direction: (kpis.avg_basket_growth_pct ?? 0) >= 0 ? 'up' : 'down' }}
+              onClick={() => drillTo('/detail/sales', withCrossFilters())}
+              info={{
+                formula: 'Revenue ÷ distinct orders.',
+                source: 'report_sales (/sales/overview/)',
+              }}
             />
             <KPICard
               title="Gross Margin"
               value={`${kpis.gross_margin_pct ?? 0}%`}
               subtitle={`Target: ${kpis.margin_target_pct ?? 0}%`}
               trend={{ value: `${kpis.margin_change_pp ?? 0}pp`, direction: (kpis.margin_change_pp ?? 0) >= 0 ? 'up' : 'down' }}
+              onClick={() => drillTo('/detail/sales', withCrossFilters())}
+              info={{
+                formula: '(Revenue − COGS) ÷ revenue × 100.',
+                source: 'report_sales (/sales/overview/)',
+                notes: COGS_NOTE,
+              }}
             />
             <KPICard
               title="Return Rate"
               value={`${returnsKpis.return_rate_pct ?? 0}%`}
               subtitle={`${returnsKpis.total_returns ?? 0} Items / ${formatIndianCurrencyAbbreviated(returnsKpis.total_return_value || 0)}`}
               trend={{ value: `${returnsKpis.return_rate_change_pp ?? 0}pp`, direction: (returnsKpis.return_rate_change_pp ?? 0) >= 0 ? 'up' : 'down' }}
+              onClick={() => drillTo('/detail/sales-returns', withCrossFilters())}
+              info={{
+                formula: 'Return value ÷ gross sales × 100 over the selected period.',
+                source: 'report_sales_returns vs report_sales (/sales/returns/overview/)',
+              }}
             />
           </div>
 
@@ -326,79 +409,129 @@ export const SalesCommandCenter = () => {
           <div className="grid grid-cols-2 gap-4 mb-6">
             <ChartCard
               title="Daily Sales Trend (Last 7 Days)"
-              onDrillThrough={() => handleDrillThrough('/detail/sales')}
+              data={filteredSalesTrend}
+              columns={[
+                { key: 'date', label: 'Date' },
+                { key: 'sales', label: 'Revenue', format: money },
+                { key: 'orders', label: 'Orders' },
+                { key: 'avgBasket', label: 'Avg Basket', format: money },
+              ]}
+              drillTarget="/detail/sales"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Revenue = Σ order line totals per day; Orders = distinct invoices per day.',
+                source: 'report_sales — POS + B2B order lines (/sales/overview/ daily_trend)',
+              }}
             >
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={filteredSalesTrend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
-                    <Tooltip formatter={(value: any, name: string) => name === 'Orders' ? value : `₹${(value / 1000).toFixed(1)}K`} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="sales" fill="#0D9488" name="Revenue" cursor="pointer" />
-                    <Line yAxisId="right" type="monotone" dataKey="orders" stroke="#4F46E5" strokeWidth={2} name="Orders" dot={{ fill: '#4F46E5', r: 4 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={filteredSalesTrend}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
+                  <Tooltip formatter={(value: any, name: string) => name === 'Orders' ? value : `₹${(value / 1000).toFixed(1)}K`} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="sales" fill="#0D9488" name="Revenue" cursor="pointer" />
+                  <Line yAxisId="right" type="monotone" dataKey="orders" stroke="#4F46E5" strokeWidth={2} name="Orders" dot={{ fill: '#4F46E5', r: 4 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="Revenue by Payment Method">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={paymentMethodDataLive}
-                      cx="50%" cy="50%"
-                      innerRadius={60} outerRadius={100}
-                      paddingAngle={5} dataKey="value"
-                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                      onClick={(entry) => toggleCrossFilter({ id: 'paymentMethod', label: `Payment: ${entry.name}`, value: entry.name })}
-                    >
-                      {paymentMethodDataLive.map((_, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} cursor="pointer" />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(value: any) => `₹${(value / 100000).toFixed(2)}L`} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Revenue by Payment Method"
+              data={paymentMethodDataLive}
+              columns={[
+                { key: 'name', label: 'Payment Method' },
+                { key: 'value', label: 'Revenue', format: money },
+                { key: 'count', label: 'Orders' },
+                { key: 'avgTicket', label: 'Avg Ticket', format: money },
+              ]}
+              drillTarget="/detail/sales"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Revenue grouped by payment method; share = slice ÷ total.',
+                source: 'report_sales (/sales/payment-mix/)',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie
+                    data={paymentMethodDataLive}
+                    cx="50%" cy="50%"
+                    innerRadius={60} outerRadius={100}
+                    paddingAngle={5} dataKey="value"
+                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                    onClick={(entry) => toggleCrossFilter({ id: 'paymentMethod', label: `Payment: ${entry.name}`, value: entry.name })}
+                  >
+                    {paymentMethodDataLive.map((_, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} cursor="pointer" />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value: any) => `₹${(value / 100000).toFixed(2)}L`} />
+                </PieChart>
+              </ResponsiveContainer>
             </ChartCard>
           </div>
 
           {/* Charts Row 2 */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Hourly Sales Pattern (Today)">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={280}>
-                  <AreaChart data={hourlySalesData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="hour" tick={{ fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
-                    <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(1)}K`} />
-                    <Area type="monotone" dataKey="sales" stroke="#0D9488" fill="#0D9488" fillOpacity={0.2} name="Revenue" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Hourly Sales Pattern (Today)"
+              data={hourlySalesData}
+              columns={[
+                { key: 'hour', label: 'Hour' },
+                { key: 'sales', label: 'Revenue', format: money },
+                { key: 'orders', label: 'Orders' },
+              ]}
+              drillTarget="/detail/sales"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Revenue grouped by hour of sale.',
+                source: 'report_sales (/sales/hourly/)',
+                notes: 'Sale hour is synthesized for B2B orders (and POS rows lacking a time).',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={280}>
+                <AreaChart data={hourlySalesData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="hour" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
+                  <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(1)}K`} />
+                  <Area type="monotone" dataKey="sales" stroke="#0D9488" fill="#0D9488" fillOpacity={0.2} name="Revenue" />
+                </AreaChart>
+              </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="Monthly Revenue & Profit Trend">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={280}>
-                  <ComposedChart data={filteredMonthlySales} onClick={(data) => handleChartSelect(data,'month')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
-                    <Tooltip formatter={(value: any, name: string) => name === 'Margin %' ? `${value}%` : `₹${(value / 100000).toFixed(2)}L`} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="revenue" fill="#0D9488" name="Revenue" cursor="pointer" />
-                    <Bar yAxisId="left" dataKey="profit" fill="#10B981" name="Gross Profit" cursor="pointer" />
-                    <Line yAxisId="right" type="monotone" dataKey="margin" stroke="#F59E0B" strokeWidth={2} name="Margin %" dot={{ fill: '#F59E0B', r: 4 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Monthly Revenue & Profit Trend"
+              data={filteredMonthlySales}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'revenue', label: 'Revenue', format: money },
+                { key: 'profit', label: 'Gross Profit', format: money },
+                { key: 'margin', label: 'Margin %' },
+              ]}
+              drillTarget="/detail/sales"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Revenue and gross profit summed per month; Margin % = profit ÷ revenue × 100.',
+                source: 'report_sales (/sales/overview/ monthly_trend)',
+                notes: COGS_NOTE,
+              }}
+            >
+              <ResponsiveContainer width="100%" height={280}>
+                <ComposedChart data={filteredMonthlySales} onClick={(data) => handleChartSelect(data,'month')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
+                  <Tooltip formatter={(value: any, name: string) => name === 'Margin %' ? `${value}%` : `₹${(value / 100000).toFixed(2)}L`} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="revenue" fill="#0D9488" name="Revenue" cursor="pointer" />
+                  <Bar yAxisId="left" dataKey="profit" fill="#10B981" name="Gross Profit" cursor="pointer" />
+                  <Line yAxisId="right" type="monotone" dataKey="margin" stroke="#F59E0B" strokeWidth={2} name="Margin %" dot={{ fill: '#F59E0B', r: 4 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
           </div>
 
@@ -421,6 +554,7 @@ export const SalesCommandCenter = () => {
                       <tr
                         key={product.name}
                         onClick={() => toggleCrossFilter({ id: 'product', label: `Product: ${product.name}`, value: product.name })}
+                        onContextMenu={(e) => openContextMenu(e, '/detail/sales', rowFilters('product_name', 'Product', product.name), product)}
                         className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('product') && isFiltered('product', product.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{product.name}</td>
@@ -455,6 +589,7 @@ export const SalesCommandCenter = () => {
                       <tr
                         key={customer.name}
                         onClick={() => toggleCrossFilter({ id: 'customer', label: `Customer: ${customer.name}`, value: customer.name })}
+                        onContextMenu={(e) => openContextMenu(e, '/detail/sales', rowFilters('customer_name', 'Customer', customer.name), customer)}
                         className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('customer') && isFiltered('customer', customer.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{customer.name}</td>
@@ -482,74 +617,164 @@ export const SalesCommandCenter = () => {
         <>
           {/* Product KPIs */}
           <div className="grid grid-cols-5 gap-4 mb-6">
-            <KPICard title="Total SKUs Sold" value={String(kpis.total_skus_sold ?? 0)} subtitle={`Out of ${kpis.total_active_skus ?? 0} active`} trend={{ value: String(kpis.skus_sold_change ?? 0), direction: (kpis.skus_sold_change ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Revenue per SKU" value={formatIndianCurrencyAbbreviated(kpis.revenue_per_sku || 0)} subtitle="Avg across sold SKUs" trend={{ value: `${kpis.revenue_per_sku_growth_pct ?? 0}%`, direction: (kpis.revenue_per_sku_growth_pct ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Top Category" value={kpis.top_category_name || '-'} subtitle={`${formatIndianCurrencyAbbreviated(kpis.top_category_revenue || 0)} (${kpis.top_category_share_pct ?? 0}%)`} trend={{ value: `${kpis.top_category_growth_pct ?? 0}%`, direction: (kpis.top_category_growth_pct ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Highest Margin" value={`${kpis.highest_margin_category || '-'} ${kpis.highest_margin_pct ?? 0}%`} subtitle={`${formatIndianCurrencyAbbreviated(kpis.highest_margin_revenue || 0)} revenue`} trend={{ value: `${kpis.highest_margin_change_pp ?? 0}pp`, direction: (kpis.highest_margin_change_pp ?? 0) >= 0 ? 'up' : 'down' }} />
-            <KPICard title="Slow Movers" value={String(kpis.slow_movers_count ?? 0)} subtitle="<10 units/month" trend={{ value: String(kpis.slow_movers_change ?? 0), direction: (kpis.slow_movers_change ?? 0) <= 0 ? 'down' : 'up' }} />
+            <KPICard
+              title="Total SKUs Sold"
+              value={String(kpis.total_skus_sold ?? 0)}
+              subtitle={`Out of ${kpis.total_active_skus ?? 0} active`}
+              trend={{ value: String(kpis.skus_sold_change ?? 0), direction: (kpis.skus_sold_change ?? 0) >= 0 ? 'up' : 'down' }}
+              onClick={() => drillTo('/detail/product', withCrossFilters())}
+              info={{
+                formula: 'Count of distinct products with ≥1 sale in the selected period.',
+                source: 'report_sales (/sales/overview/)',
+              }}
+            />
+            <KPICard
+              title="Revenue per SKU"
+              value={formatIndianCurrencyAbbreviated(kpis.revenue_per_sku || 0)}
+              subtitle="Avg across sold SKUs"
+              trend={{ value: `${kpis.revenue_per_sku_growth_pct ?? 0}%`, direction: (kpis.revenue_per_sku_growth_pct ?? 0) >= 0 ? 'up' : 'down' }}
+              onClick={() => drillTo('/detail/product', withCrossFilters())}
+              info={{
+                formula: 'Total revenue ÷ distinct SKUs sold.',
+                source: 'report_sales (/sales/overview/)',
+              }}
+            />
+            <KPICard
+              title="Top Category"
+              value={kpis.top_category_name || '-'}
+              subtitle={`${formatIndianCurrencyAbbreviated(kpis.top_category_revenue || 0)} (${kpis.top_category_share_pct ?? 0}%)`}
+              trend={{ value: `${kpis.top_category_growth_pct ?? 0}%`, direction: (kpis.top_category_growth_pct ?? 0) >= 0 ? 'up' : 'down' }}
+              onClick={() => drillTo(
+                '/detail/sales',
+                kpis.top_category_name
+                  ? rowFilters('category', 'Category', kpis.top_category_name)
+                  : withCrossFilters(),
+              )}
+              info={{
+                formula: 'Category with the highest revenue; share = category revenue ÷ total revenue.',
+                source: 'report_sales (/sales/categories/)',
+              }}
+            />
+            <KPICard
+              title="Highest Margin"
+              value={`${kpis.highest_margin_category || '-'} ${kpis.highest_margin_pct ?? 0}%`}
+              subtitle={`${formatIndianCurrencyAbbreviated(kpis.highest_margin_revenue || 0)} revenue`}
+              trend={{ value: `${kpis.highest_margin_change_pp ?? 0}pp`, direction: (kpis.highest_margin_change_pp ?? 0) >= 0 ? 'up' : 'down' }}
+              onClick={() => drillTo(
+                '/detail/sales',
+                kpis.highest_margin_category
+                  ? rowFilters('category', 'Category', kpis.highest_margin_category)
+                  : withCrossFilters(),
+              )}
+              info={{
+                formula: 'Category with the highest gross margin % (margin = revenue − COGS).',
+                source: 'report_sales (/sales/categories/)',
+                notes: COGS_NOTE,
+              }}
+            />
+            <KPICard
+              title="Slow Movers"
+              value={String(kpis.slow_movers_count ?? 0)}
+              subtitle="<10 units/month"
+              trend={{ value: String(kpis.slow_movers_change ?? 0), direction: (kpis.slow_movers_change ?? 0) <= 0 ? 'down' : 'up' }}
+              onClick={() => drillTo('/detail/product', withCrossFilters())}
+              info={{
+                formula: 'Count of products selling fewer than 10 units per month.',
+                source: 'report_sales (/sales/slow-movers/)',
+              }}
+            />
           </div>
 
           {/* Charts */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Revenue by Category" onDrillThrough={() => handleDrillThrough('/detail/product')}>
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/product')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={categoryRevenueData} onClick={(data) => handleChartSelect(data,'category', '/detail/product')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="category" tick={{ fontSize: 11 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
-                    <Tooltip formatter={(value: any, name: string) => name === 'Margin %' ? `${value}%` : name === 'Growth %' ? `${value}%` : `₹${(value / 100000).toFixed(2)}L`} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="revenue" fill="#0D9488" name="Revenue" cursor="pointer" />
-                    <Line yAxisId="right" type="monotone" dataKey="margin" stroke="#F59E0B" strokeWidth={2} name="Margin %" dot={{ fill: '#F59E0B', r: 4 }} />
-                    <Line yAxisId="right" type="monotone" dataKey="growth" stroke="#4F46E5" strokeWidth={2} name="Growth %" dot={{ fill: '#4F46E5', r: 4 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Revenue by Category"
+              data={categoryRevenueData}
+              columns={[
+                { key: 'category', label: 'Category' },
+                { key: 'revenue', label: 'Revenue', format: money },
+                { key: 'margin', label: 'Margin %' },
+                { key: 'growth', label: 'Growth %' },
+              ]}
+              drillTarget="/detail/sales"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Revenue, margin % and growth % grouped by product category.',
+                source: 'report_sales (/sales/categories/)',
+                notes: COGS_NOTE,
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={categoryRevenueData} onClick={(data) => handleChartSelect(data,'category')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="category" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
+                  <Tooltip formatter={(value: any, name: string) => name === 'Margin %' ? `${value}%` : name === 'Growth %' ? `${value}%` : `₹${(value / 100000).toFixed(2)}L`} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="revenue" fill="#0D9488" name="Revenue" cursor="pointer" />
+                  <Line yAxisId="right" type="monotone" dataKey="margin" stroke="#F59E0B" strokeWidth={2} name="Margin %" dot={{ fill: '#F59E0B', r: 4 }} />
+                  <Line yAxisId="right" type="monotone" dataKey="growth" stroke="#4F46E5" strokeWidth={2} name="Growth %" dot={{ fill: '#4F46E5', r: 4 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="Product Profitability Scatter (Revenue vs Margin)">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/product')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ScatterChart>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="revenue" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} name="Revenue" />
-                    <YAxis dataKey="margin" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} name="Margin" domain={['auto', 'auto']} />
-                    <ZAxis dataKey="qty" range={[50, 400]} name="Quantity" />
-                    <Tooltip
-                      formatter={(value: any, name: string) => {
-                        if (name === 'Revenue') return `₹${(value / 1000).toFixed(1)}K`;
-                        if (name === 'Margin') return `${value}%`;
-                        return value.toLocaleString('en-IN');
-                      }}
-                      content={({ active, payload }) => {
-                        if (active && payload && payload.length) {
-                          const data = payload[0].payload;
-                          return (
-                            <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs">
-                              <p className="font-semibold text-gray-900">{data.name}</p>
-                              <p className="text-gray-600">Revenue: ₹{(data.revenue / 1000).toFixed(1)}K</p>
-                              <p className="text-gray-600">Margin: {data.margin}%</p>
-                              <p className="text-gray-600">Qty Sold: {data.qty?.toLocaleString('en-IN')}</p>
-                              <p className="text-gray-600">Profit Contribution: {data.profitContrib}%</p>
-                            </div>
-                          );
-                        }
-                        return null;
-                      }}
-                    />
-                    <Scatter data={productProfitabilityData} fill="#0D9488" cursor="pointer">
-                      {productProfitabilityData.map((entry: any, index: number) => (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={entry.margin >= 22 ? '#10B981' : entry.margin >= 19 ? '#F59E0B' : '#EF4444'}
-                        />
-                      ))}
-                    </Scatter>
-                  </ScatterChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Product Profitability Scatter (Revenue vs Margin)"
+              data={productProfitabilityData}
+              columns={[
+                { key: 'name', label: 'Product' },
+                { key: 'category', label: 'Category' },
+                { key: 'revenue', label: 'Revenue', format: money },
+                { key: 'margin', label: 'Margin %' },
+                { key: 'qty', label: 'Qty Sold' },
+              ]}
+              drillTarget="/detail/product"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Each dot is a product: x = revenue, y = margin %, bubble size = quantity sold.',
+                source: 'report_sales (/sales/product-profitability/)',
+                notes: COGS_NOTE,
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <ScatterChart>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="revenue" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} name="Revenue" />
+                  <YAxis dataKey="margin" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} name="Margin" domain={['auto', 'auto']} />
+                  <ZAxis dataKey="qty" range={[50, 400]} name="Quantity" />
+                  <Tooltip
+                    formatter={(value: any, name: string) => {
+                      if (name === 'Revenue') return `₹${(value / 1000).toFixed(1)}K`;
+                      if (name === 'Margin') return `${value}%`;
+                      return value.toLocaleString('en-IN');
+                    }}
+                    content={({ active, payload }) => {
+                      if (active && payload && payload.length) {
+                        const data = payload[0].payload;
+                        return (
+                          <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs">
+                            <p className="font-semibold text-gray-900">{data.name}</p>
+                            <p className="text-gray-600">Revenue: ₹{(data.revenue / 1000).toFixed(1)}K</p>
+                            <p className="text-gray-600">Margin: {data.margin}%</p>
+                            <p className="text-gray-600">Qty Sold: {data.qty?.toLocaleString('en-IN')}</p>
+                            <p className="text-gray-600">Profit Contribution: {data.profitContrib}%</p>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
+                  <Scatter data={productProfitabilityData} fill="#0D9488" cursor="pointer">
+                    {productProfitabilityData.map((entry: any, index: number) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={entry.margin >= 22 ? '#10B981' : entry.margin >= 19 ? '#F59E0B' : '#EF4444'}
+                      />
+                    ))}
+                  </Scatter>
+                </ScatterChart>
+              </ResponsiveContainer>
             </ChartCard>
           </div>
 
@@ -576,6 +801,7 @@ export const SalesCommandCenter = () => {
                     <tr
                       key={product.name}
                       onClick={() => toggleCrossFilter({ id: 'product', label: `Product: ${product.name}`, value: product.name })}
+                      onContextMenu={(e) => openContextMenu(e, '/detail/sales', rowFilters('product_name', 'Product', product.name), product)}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('product') && isFiltered('product', product.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 text-gray-500">{index + 1}</td>
@@ -625,6 +851,7 @@ export const SalesCommandCenter = () => {
                     <tr
                       key={product.name}
                       onClick={() => toggleCrossFilter({ id: 'product', label: `Product: ${product.name}`, value: product.name })}
+                      onContextMenu={(e) => openContextMenu(e, '/detail/product', rowFilters('product_name', 'Product', product.name), product)}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('product') && isFiltered('product', product.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{product.name}</td>
@@ -655,73 +882,167 @@ export const SalesCommandCenter = () => {
         <>
           {/* Customer KPIs */}
           <div className="grid grid-cols-5 gap-4 mb-6">
-            <KPICard title="Total Customers" value={String(topCustomersData.length)} subtitle="In selected period" />
-            <KPICard title="Customer Segments" value={String(customerSegmentationData.length)} subtitle="Unique types" />
-            <KPICard title="Top Customer Revenue" value={formatIndianCurrencyAbbreviated(topCustomersData[0]?.revenue || 0)} subtitle={topCustomersData[0]?.name || '-'} />
-            <KPICard title="Outstanding" value={formatIndianCurrencyAbbreviated(apiOutstandingAging?.total_outstanding || 0)} subtitle={`${(apiOutstandingAging?.by_customer || []).length} parties`} />
-            <KPICard title="Avg Order Value" value={formatIndianCurrencyAbbreviated(kpis.avg_order_value || 0)} subtitle="Across all customers" />
+            <KPICard
+              title="Total Customers"
+              value={String(topCustomersData.length)}
+              subtitle="In selected period"
+              onClick={() => drillTo('/detail/sales', withCrossFilters())}
+              info={{
+                formula: 'Count of distinct customers with ≥1 order in the selected period (top-customers list).',
+                source: 'report_sales (/sales/customers/)',
+              }}
+            />
+            <KPICard
+              title="Customer Segments"
+              value={String(customerSegmentationData.length)}
+              subtitle="Unique types"
+              onClick={() => drillTo('/detail/sales', withCrossFilters())}
+              info={{
+                formula: 'Count of distinct customer types with sales in the period.',
+                source: 'report_sales (/sales/customer-segments/)',
+              }}
+            />
+            <KPICard
+              title="Top Customer Revenue"
+              value={formatIndianCurrencyAbbreviated(topCustomersData[0]?.revenue || 0)}
+              subtitle={topCustomersData[0]?.name || '-'}
+              onClick={() => drillTo(
+                '/detail/sales',
+                topCustomersData[0]?.name
+                  ? rowFilters('customer_name', 'Customer', topCustomersData[0].name)
+                  : withCrossFilters(),
+              )}
+              info={{
+                formula: 'Revenue of the highest-revenue customer in the period.',
+                source: 'report_sales (/sales/customers/)',
+              }}
+            />
+            <KPICard
+              title="Outstanding"
+              value={formatIndianCurrencyAbbreviated(apiOutstandingAging?.total_outstanding || 0)}
+              subtitle={`${(apiOutstandingAging?.by_customer || []).length} parties`}
+              onClick={() => drillTo('/detail/sales', withCrossFilters([{ id: 'payment_method', label: 'Payment: Credit', value: 'Credit' }]))}
+              info={{
+                formula: 'Σ unpaid credit-sale balance across parties.',
+                source: 'report_sales credit sales (/sales/outstanding-aging/)',
+              }}
+            />
+            <KPICard
+              title="Avg Order Value"
+              value={formatIndianCurrencyAbbreviated(kpis.avg_order_value || 0)}
+              subtitle="Across all customers"
+              onClick={() => drillTo('/detail/sales', withCrossFilters())}
+              info={{
+                formula: 'Revenue ÷ distinct orders.',
+                source: 'report_sales (/sales/overview/)',
+              }}
+            />
           </div>
 
           {/* Charts */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Customer Segmentation by Revenue" onDrillThrough={() => handleDrillThrough('/detail/sales')}>
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={customerSegmentationData}
-                      cx="50%" cy="50%"
-                      innerRadius={60} outerRadius={100}
-                      paddingAngle={5} dataKey="revenue"
-                      label={({ segment, share }) => `${(segment || '').split(' ')[0]} ${share ?? 0}%`}
-                      onClick={(entry) => toggleCrossFilter({ id: 'segment', label: `Segment: ${entry.segment}`, value: entry.segment })}
-                    >
-                      {customerSegmentationData.map((_: any, index: number) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} cursor="pointer" />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(value: any) => `₹${(value / 100000).toFixed(2)}L`} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Customer Segmentation by Revenue"
+              data={customerSegmentationData}
+              columns={[
+                { key: 'segment', label: 'Segment' },
+                { key: 'customers', label: 'Customers' },
+                { key: 'revenue', label: 'Revenue', format: money },
+                { key: 'share', label: 'Share %' },
+              ]}
+              drillTarget="/detail/sales"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Revenue grouped by customer type; share = segment revenue ÷ total.',
+                source: 'report_sales (/sales/customer-segments/)',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie
+                    data={customerSegmentationData}
+                    cx="50%" cy="50%"
+                    innerRadius={60} outerRadius={100}
+                    paddingAngle={5} dataKey="revenue"
+                    label={({ segment, share }) => `${(segment || '').split(' ')[0]} ${share ?? 0}%`}
+                    onClick={(entry) => toggleCrossFilter({ id: 'segment', label: `Segment: ${entry.segment}`, value: entry.segment })}
+                  >
+                    {customerSegmentationData.map((_: any, index: number) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} cursor="pointer" />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value: any) => `₹${(value / 100000).toFixed(2)}L`} />
+                </PieChart>
+              </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="Customer Growth & B2B Revenue Trend">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={customerGrowthData} onClick={(data) => handleChartSelect(data,'month')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
-                    <Tooltip formatter={(value: any, name: string) => name === 'B2B Revenue' ? `₹${(value / 100000).toFixed(2)}L` : value} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="newCustomers" fill="#10B981" name="Customers" cursor="pointer" />
-                    <Line yAxisId="right" type="monotone" dataKey="b2bRevenue" stroke="#0D9488" strokeWidth={2} name="B2B Revenue" dot={{ fill: '#0D9488', r: 4 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Customer Growth & B2B Revenue Trend"
+              data={customerGrowthData}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'newCustomers', label: 'Customers' },
+                { key: 'b2bRevenue', label: 'B2B Revenue', format: money },
+                { key: 'orders', label: 'Orders' },
+              ]}
+              drillTarget="/detail/sales"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Distinct customers and B2B revenue summed per month.',
+                source: 'report_sales (/sales/customer-growth/)',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={customerGrowthData} onClick={(data) => handleChartSelect(data,'month')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
+                  <Tooltip formatter={(value: any, name: string) => name === 'B2B Revenue' ? `₹${(value / 100000).toFixed(2)}L` : value} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="newCustomers" fill="#10B981" name="Customers" cursor="pointer" />
+                  <Line yAxisId="right" type="monotone" dataKey="b2bRevenue" stroke="#0D9488" strokeWidth={2} name="B2B Revenue" dot={{ fill: '#0D9488', r: 4 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
           </div>
 
           {/* Outstanding Aging */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Outstanding Receivables Aging">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={outstandingAgingData} onClick={(data) => handleChartSelect(data,'range')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="range" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
-                    <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(1)}K`} />
-                    <Bar dataKey="amount" cursor="pointer">
-                      {outstandingAgingData.map((_: any, index: number) => (
-                        <Cell key={`cell-${index}`} fill={index < 2 ? '#10B981' : index < 3 ? '#F59E0B' : '#EF4444'} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Outstanding Receivables Aging"
+              data={outstandingAgingData}
+              columns={[
+                { key: 'range', label: 'Customer' },
+                { key: 'amount', label: 'Outstanding', format: money },
+              ]}
+              drillTarget="/detail/sales"
+              drillFilters={() => {
+                const extra: DrillFilter[] = [{ id: 'payment_method', label: 'Payment: Credit', value: 'Credit' }];
+                const rangeF = activeFilters.find((f) => f.id === 'range');
+                if (rangeF && !Array.isArray(rangeF.value)) {
+                  extra.push({ id: 'customer_name', label: `Customer: ${rangeF.value}`, value: String(rangeF.value) });
+                }
+                return withCrossFilters(extra);
+              }}
+              info={{
+                formula: 'Unpaid credit-sale balance per customer.',
+                source: 'report_sales credit sales (/sales/outstanding-aging/)',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={outstandingAgingData} onClick={(data) => handleChartSelect(data,'range')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="range" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
+                  <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(1)}K`} />
+                  <Bar dataKey="amount" cursor="pointer">
+                    {outstandingAgingData.map((_: any, index: number) => (
+                      <Cell key={`cell-${index}`} fill={index < 2 ? '#10B981' : index < 3 ? '#F59E0B' : '#EF4444'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </ChartCard>
 
             {/* Segmentation Table */}
@@ -742,6 +1063,7 @@ export const SalesCommandCenter = () => {
                       <tr
                         key={seg.segment}
                         onClick={() => toggleCrossFilter({ id: 'segment', label: `Segment: ${seg.segment}`, value: seg.segment })}
+                        onContextMenu={(e) => openContextMenu(e, '/detail/sales', rowFilters('customer_type', 'Segment', seg.segment), seg)}
                         className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('segment') && isFiltered('segment', seg.segment) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{seg.segment}</td>
@@ -776,6 +1098,7 @@ export const SalesCommandCenter = () => {
                     <tr
                       key={customer.name}
                       onClick={() => toggleCrossFilter({ id: 'customer', label: `Customer: ${customer.name}`, value: customer.name })}
+                      onContextMenu={(e) => openContextMenu(e, '/detail/sales', rowFilters('customer_name', 'Customer', customer.name), customer)}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('customer') && isFiltered('customer', customer.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{customer.name}</td>
@@ -802,68 +1125,156 @@ export const SalesCommandCenter = () => {
         <>
           {/* Doctor KPIs */}
           <div className="grid grid-cols-5 gap-4 mb-6">
-            <KPICard title="Active Prescribers" value={String(topDoctorsData.length)} subtitle="In selected period" />
-            <KPICard title="Total Prescriptions" value={String(topDoctorsData.reduce((s, d) => s + d.prescriptions, 0))} subtitle="Total Rx count" />
-            <KPICard title="Rx Revenue" value={formatIndianCurrencyAbbreviated(topDoctorsData.reduce((s, d) => s + d.revenue, 0))} subtitle="From prescriptions" />
-            <KPICard title="Top Prescriber" value={topDoctorsData[0]?.name || '-'} subtitle={topDoctorsData[0] ? `${topDoctorsData[0].prescriptions} Rx` : ''} />
-            <KPICard title="Specialities" value={String(specialityRevenueData.length)} subtitle="Active specialities" />
+            <KPICard
+              title="Active Prescribers"
+              value={String(topDoctorsData.length)}
+              subtitle="In selected period"
+              onClick={() => drillTo('/detail/sales', withCrossFilters())}
+              info={{
+                formula: 'Count of distinct doctors linked to sales in the selected period.',
+                source: 'report_sales (/sales/doctors/)',
+              }}
+            />
+            <KPICard
+              title="Total Prescriptions"
+              value={String(topDoctorsData.reduce((s, d) => s + d.prescriptions, 0))}
+              subtitle="Total Rx count"
+              onClick={() => drillTo('/detail/sales', withCrossFilters())}
+              info={{
+                formula: 'Σ prescription counts across the prescribers shown.',
+                source: 'report_sales (/sales/doctors/)',
+              }}
+            />
+            <KPICard
+              title="Rx Revenue"
+              value={formatIndianCurrencyAbbreviated(topDoctorsData.reduce((s, d) => s + d.revenue, 0))}
+              subtitle="From prescriptions"
+              onClick={() => drillTo('/detail/sales', withCrossFilters())}
+              info={{
+                formula: 'Σ revenue of prescription-linked sales across the prescribers shown.',
+                source: 'report_sales (/sales/doctors/)',
+              }}
+            />
+            <KPICard
+              title="Top Prescriber"
+              value={topDoctorsData[0]?.name || '-'}
+              subtitle={topDoctorsData[0] ? `${topDoctorsData[0].prescriptions} Rx` : ''}
+              onClick={() => drillTo(
+                '/detail/sales',
+                topDoctorsData[0]?.name
+                  ? rowFilters('doctor_name', 'Doctor', topDoctorsData[0].name)
+                  : withCrossFilters(),
+              )}
+              info={{
+                formula: 'Doctor with the most prescriptions in the period.',
+                source: 'report_sales (/sales/doctors/)',
+              }}
+            />
+            <KPICard
+              title="Specialities"
+              value={String(specialityRevenueData.length)}
+              subtitle="Active specialities"
+              onClick={() => drillTo('/detail/sales', withCrossFilters())}
+              info={{
+                formula: 'Count of distinct specialities among active prescribers.',
+                source: 'report_sales (/sales/doctor-specialties/)',
+              }}
+            />
           </div>
 
           {/* Charts */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Revenue by Speciality" onDrillThrough={() => handleDrillThrough('/detail/sales')}>
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={specialityRevenueData} layout="vertical" onClick={(data) => handleChartSelect(data,'speciality')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
-                    <YAxis type="category" dataKey="speciality" tick={{ fontSize: 11 }} width={110} />
-                    <Tooltip formatter={(value: any) => `₹${(value / 100000).toFixed(2)}L`} />
-                    <Bar dataKey="revenue" fill="#0D9488" cursor="pointer">
-                      {specialityRevenueData.map((_: any, index: number) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Revenue by Speciality"
+              data={specialityRevenueData}
+              columns={[
+                { key: 'speciality', label: 'Speciality' },
+                { key: 'revenue', label: 'Revenue', format: money },
+                { key: 'prescriptions', label: 'Rx Count' },
+              ]}
+              drillTarget="/detail/sales"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Prescription revenue grouped by doctor speciality.',
+                source: 'report_sales (/sales/doctor-specialties/)',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={specialityRevenueData} layout="vertical" onClick={(data) => handleChartSelect(data,'speciality')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
+                  <YAxis type="category" dataKey="speciality" tick={{ fontSize: 11 }} width={110} />
+                  <Tooltip formatter={(value: any) => `₹${(value / 100000).toFixed(2)}L`} />
+                  <Bar dataKey="revenue" fill="#0D9488" cursor="pointer">
+                    {specialityRevenueData.map((_: any, index: number) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="Top 3 Doctors - Performance Radar">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <RadarChart data={doctorRadarData}>
-                    <PolarGrid />
-                    <PolarAngleAxis dataKey="metric" tick={{ fontSize: 11 }} />
-                    <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fontSize: 10 }} />
-                    {doctorRadarData.length > 0 && Object.keys(doctorRadarData[0]).filter(k => k !== 'metric').map((doctorKey, i) => (
-                      <Radar key={doctorKey} name={doctorKey} dataKey={doctorKey} stroke={COLORS[i % COLORS.length]} fill={COLORS[i % COLORS.length]} fillOpacity={0.15} />
-                    ))}
-                    <Legend />
-                    <Tooltip />
-                  </RadarChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Top 3 Doctors - Performance Radar"
+              data={doctorRadarData}
+              columns={[
+                { key: 'metric', label: 'Metric' },
+                ...(doctorRadarData.length > 0
+                  ? Object.keys(doctorRadarData[0]).filter((k) => k !== 'metric').map((k) => ({ key: k, label: k }))
+                  : []),
+              ]}
+              drillTarget="/detail/sales"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Top 3 prescribers scored 0–100 per metric, normalized to the leading doctor.',
+                source: 'report_sales (/sales/doctor-radar/)',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <RadarChart data={doctorRadarData}>
+                  <PolarGrid />
+                  <PolarAngleAxis dataKey="metric" tick={{ fontSize: 11 }} />
+                  <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fontSize: 10 }} />
+                  {doctorRadarData.length > 0 && Object.keys(doctorRadarData[0]).filter(k => k !== 'metric').map((doctorKey, i) => (
+                    <Radar key={doctorKey} name={doctorKey} dataKey={doctorKey} stroke={COLORS[i % COLORS.length]} fill={COLORS[i % COLORS.length]} fillOpacity={0.15} />
+                  ))}
+                  <Legend />
+                  <Tooltip />
+                </RadarChart>
+              </ResponsiveContainer>
             </ChartCard>
           </div>
 
           {/* Doctor Prescription Trend */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Prescription Volume Trend">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={280}>
-                  <ComposedChart data={doctorPrescriptionTrendData} onClick={(data) => handleChartSelect(data,'month')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
-                    <Tooltip />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="totalRx" fill="#0D9488" name="Total Rx" cursor="pointer" />
-                    <Line yAxisId="right" type="monotone" dataKey="uniqueDoctors" stroke="#4F46E5" strokeWidth={2} name="Active Doctors" dot={{ fill: '#4F46E5', r: 4 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Prescription Volume Trend"
+              data={doctorPrescriptionTrendData}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'totalRx', label: 'Total Rx' },
+                { key: 'uniqueDoctors', label: 'Active Doctors' },
+                { key: 'revenue', label: 'Revenue', format: money },
+              ]}
+              drillTarget="/detail/sales"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Prescription count and distinct active prescribers per month.',
+                source: 'report_sales (/sales/doctor-prescription-trend/)',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={280}>
+                <ComposedChart data={doctorPrescriptionTrendData} onClick={(data) => handleChartSelect(data,'month')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="totalRx" fill="#0D9488" name="Total Rx" cursor="pointer" />
+                  <Line yAxisId="right" type="monotone" dataKey="uniqueDoctors" stroke="#4F46E5" strokeWidth={2} name="Active Doctors" dot={{ fill: '#4F46E5', r: 4 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
 
             {/* Speciality Summary Table */}
@@ -885,6 +1296,7 @@ export const SalesCommandCenter = () => {
                       <tr
                         key={spec.speciality}
                         onClick={() => toggleCrossFilter({ id: 'speciality', label: `Speciality: ${spec.speciality}`, value: spec.speciality })}
+                        onContextMenu={(e) => openContextMenu(e, '/detail/sales', rowFilters('speciality', 'Speciality', spec.speciality), spec)}
                         className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('speciality') && isFiltered('speciality', spec.speciality) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{spec.speciality}</td>
@@ -922,6 +1334,7 @@ export const SalesCommandCenter = () => {
                     <tr
                       key={doctor.name}
                       onClick={() => toggleCrossFilter({ id: 'doctor', label: `Doctor: ${doctor.name}`, value: doctor.name })}
+                      onContextMenu={(e) => openContextMenu(e, '/detail/sales', rowFilters('doctor_name', 'Doctor', doctor.name), doctor)}
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('doctor') && isFiltered('doctor', doctor.name) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 text-gray-500">{index + 1}</td>
@@ -946,69 +1359,160 @@ export const SalesCommandCenter = () => {
         <>
           {/* Returns KPIs */}
           <div className="grid grid-cols-5 gap-4 mb-6">
-            <KPICard title="Total Returns" value={String(returnsKpis.total_returns ?? 0)} subtitle={`${formatIndianCurrencyAbbreviated(returnsKpis.total_value || 0)} value`} />
-            <KPICard title="Return Qty" value={String(returnsKpis.total_qty ?? 0)} subtitle="Items returned" />
-            <KPICard title="Return Value" value={formatIndianCurrencyAbbreviated(returnsKpis.total_value || 0)} subtitle="Total return value" />
-            <KPICard title="Top Reason" value={returnsByReasonData[0]?.reason || '-'} subtitle={returnsByReasonData[0] ? `${returnsByReasonData[0].count} returns` : ''} />
-            <KPICard title="Net Profit Impact" value={returnsKpis.net_profit_impact ? `-${formatIndianCurrencyAbbreviated(Math.abs(returnsKpis.net_profit_impact))}` : '-'} subtitle={`${returnsKpis.profit_impact_pct ?? 0}% of gross profit`} trend={{ value: formatIndianCurrencyAbbreviated(Math.abs(returnsKpis.profit_impact_change || 0)), direction: (returnsKpis.profit_impact_change ?? 0) >= 0 ? 'up' : 'down' }} />
+            <KPICard
+              title="Total Returns"
+              value={String(returnsKpis.total_returns ?? 0)}
+              subtitle={`${formatIndianCurrencyAbbreviated(returnsKpis.total_value || 0)} value`}
+              onClick={() => drillTo('/detail/sales-returns', withCrossFilters())}
+              info={{
+                formula: 'Count of return transactions in the selected period.',
+                source: 'report_sales_returns (/sales/returns/overview/)',
+              }}
+            />
+            <KPICard
+              title="Return Qty"
+              value={String(returnsKpis.total_qty ?? 0)}
+              subtitle="Items returned"
+              onClick={() => drillTo('/detail/sales-returns', withCrossFilters())}
+              info={{
+                formula: 'Σ quantity across return lines.',
+                source: 'report_sales_returns (/sales/returns/overview/)',
+              }}
+            />
+            <KPICard
+              title="Return Value"
+              value={formatIndianCurrencyAbbreviated(returnsKpis.total_value || 0)}
+              subtitle="Total return value"
+              onClick={() => drillTo('/detail/sales-returns', withCrossFilters())}
+              info={{
+                formula: 'Σ return line values in the selected period.',
+                source: 'report_sales_returns (/sales/returns/overview/)',
+              }}
+            />
+            <KPICard
+              title="Top Reason"
+              value={returnsByReasonData[0]?.reason || '-'}
+              subtitle={returnsByReasonData[0] ? `${returnsByReasonData[0].count} returns` : ''}
+              onClick={() => drillTo(
+                '/detail/sales-returns',
+                returnsByReasonData[0]?.reason
+                  ? rowFilters('reason', 'Reason', returnsByReasonData[0].reason)
+                  : withCrossFilters(),
+              )}
+              info={{
+                formula: 'Return reason with the highest return count.',
+                source: 'report_sales_returns (/sales/returns/overview/)',
+              }}
+            />
+            <KPICard
+              title="Net Profit Impact"
+              value={returnsKpis.net_profit_impact ? `-${formatIndianCurrencyAbbreviated(Math.abs(returnsKpis.net_profit_impact))}` : '-'}
+              subtitle={`${returnsKpis.profit_impact_pct ?? 0}% of gross profit`}
+              trend={{ value: formatIndianCurrencyAbbreviated(Math.abs(returnsKpis.profit_impact_change || 0)), direction: (returnsKpis.profit_impact_change ?? 0) >= 0 ? 'up' : 'down' }}
+              onClick={() => drillTo('/detail/sales-returns', withCrossFilters())}
+              info={{
+                formula: 'Gross margin lost to returns, net of restockable value; % = impact ÷ gross profit.',
+                source: 'report_sales_returns (/sales/returns/profit-impact/)',
+                notes: COGS_NOTE,
+              }}
+            />
           </div>
 
           {/* Charts */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Returns Trend (Last 6 Months)" onDrillThrough={() => handleDrillThrough('/detail/sales')}>
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={returnsTrendData} onClick={(data) => handleChartSelect(data,'month')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
-                    <Tooltip formatter={(value: any, name: string) => name === 'Return Rate %' ? `${value}%` : name === 'Return Count' ? value : `₹${(value / 1000).toFixed(1)}K`} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="value" fill="#EF4444" name="Return Value" cursor="pointer" />
-                    <Line yAxisId="right" type="monotone" dataKey="rate" stroke="#F59E0B" strokeWidth={2} name="Return Rate %" dot={{ fill: '#F59E0B', r: 4 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Returns Trend (Last 6 Months)"
+              data={returnsTrendData}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'value', label: 'Return Value', format: money },
+                { key: 'count', label: 'Return Count' },
+                { key: 'rate', label: 'Return Rate %' },
+              ]}
+              drillTarget="/detail/sales-returns"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Return value, count and rate (return value ÷ sales × 100) per month.',
+                source: 'report_sales_returns (/sales/returns/overview/ trend)',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={returnsTrendData} onClick={(data) => handleChartSelect(data,'month')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
+                  <Tooltip formatter={(value: any, name: string) => name === 'Return Rate %' ? `${value}%` : name === 'Return Count' ? value : `₹${(value / 1000).toFixed(1)}K`} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="value" fill="#EF4444" name="Return Value" cursor="pointer" />
+                  <Line yAxisId="right" type="monotone" dataKey="rate" stroke="#F59E0B" strokeWidth={2} name="Return Rate %" dot={{ fill: '#F59E0B', r: 4 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
             </ChartCard>
 
-            <ChartCard title="Returns by Reason">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={returnsByReasonData} layout="vertical" onClick={(data) => handleChartSelect(data,'reason')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
-                    <YAxis type="category" dataKey="reason" tick={{ fontSize: 10 }} width={130} />
-                    <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(1)}K`} />
-                    <Bar dataKey="value" cursor="pointer">
-                      {returnsByReasonData.map((_: any, index: number) => (
-                        <Cell key={`cell-${index}`} fill={['#EF4444', '#F59E0B', '#3B82F6', '#8B5CF6', '#6B7280', '#EC4899'][index % 6]} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Returns by Reason"
+              data={returnsByReasonData}
+              columns={[
+                { key: 'reason', label: 'Reason' },
+                { key: 'value', label: 'Return Value', format: money },
+                { key: 'count', label: 'Returns' },
+              ]}
+              drillTarget="/detail/sales-returns"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Return value grouped by return reason.',
+                source: 'report_sales_returns (/sales/returns/overview/ by_reason)',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={returnsByReasonData} layout="vertical" onClick={(data) => handleChartSelect(data,'reason')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} />
+                  <YAxis type="category" dataKey="reason" tick={{ fontSize: 10 }} width={130} />
+                  <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(1)}K`} />
+                  <Bar dataKey="value" cursor="pointer">
+                    {returnsByReasonData.map((_: any, index: number) => (
+                      <Cell key={`cell-${index}`} fill={['#EF4444', '#F59E0B', '#3B82F6', '#8B5CF6', '#6B7280', '#EC4899'][index % 6]} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </ChartCard>
           </div>
 
           {/* Returns by Category + Profit Impact */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="Return Rate by Category">
-              <div onContextMenu={(e) => handleChartRightClick(e, '/detail/sales')} className="cursor-context-menu">
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={returnsByCategoryData} onClick={(data) => handleChartSelect(data,'category')}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="category" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
-                    <Tooltip formatter={(value: any) => `${value}%`} />
-                    <Bar dataKey="rate" name="Return Rate %" cursor="pointer">
-                      {returnsByCategoryData.map((entry: any, index: number) => (
-                        <Cell key={`cell-${index}`} fill={(entry.rate ?? 0) > 3 ? '#EF4444' : (entry.rate ?? 0) > 2.5 ? '#F59E0B' : '#10B981'} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+            <ChartCard
+              title="Return Rate by Category"
+              data={returnsByCategoryData}
+              columns={[
+                { key: 'category', label: 'Category' },
+                { key: 'returns', label: 'Returns' },
+                { key: 'value', label: 'Return Value', format: money },
+                { key: 'totalSales', label: 'Total Sales', format: money },
+                { key: 'rate', label: 'Return Rate %' },
+              ]}
+              drillTarget="/detail/sales-returns"
+              drillFilters={() => withCrossFilters()}
+              info={{
+                formula: 'Return value ÷ total sales × 100 per product category.',
+                source: 'report_sales_returns vs report_sales (/sales/returns/by-category/)',
+              }}
+            >
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={returnsByCategoryData} onClick={(data) => handleChartSelect(data,'category')}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="category" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
+                  <Tooltip formatter={(value: any) => `${value}%`} />
+                  <Bar dataKey="rate" name="Return Rate %" cursor="pointer">
+                    {returnsByCategoryData.map((entry: any, index: number) => (
+                      <Cell key={`cell-${index}`} fill={(entry.rate ?? 0) > 3 ? '#EF4444' : (entry.rate ?? 0) > 2.5 ? '#F59E0B' : '#10B981'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </ChartCard>
 
             {/* Profit Impact Waterfall */}
@@ -1016,7 +1520,11 @@ export const SalesCommandCenter = () => {
               <h3 className="text-sm font-semibold text-gray-900 mb-4">Returns Impact on Profit</h3>
               <div className="space-y-3">
                 {returnImpactData.map((item: any) => (
-                  <div key={item.item} className="flex items-center justify-between">
+                  <div
+                    key={item.item}
+                    className="flex items-center justify-between cursor-context-menu"
+                    onContextMenu={(e) => openContextMenu(e, '/detail/sales-returns', withCrossFilters(), item)}
+                  >
                     <span className={`text-sm ${item.item === 'Net Profit Impact' ? 'font-bold text-gray-900' : 'text-gray-700'}`}>
                       {item.item}
                     </span>
@@ -1063,6 +1571,7 @@ export const SalesCommandCenter = () => {
                       <tr
                         key={item.reason}
                         onClick={() => toggleCrossFilter({ id: 'returnReason', label: `Reason: ${item.reason}`, value: item.reason })}
+                        onContextMenu={(e) => openContextMenu(e, '/detail/sales-returns', rowFilters('reason', 'Reason', item.reason), item)}
                         className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('returnReason') && isFiltered('returnReason', item.reason) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{item.reason}</td>
@@ -1110,6 +1619,7 @@ export const SalesCommandCenter = () => {
                       <tr
                         key={item.category}
                         onClick={() => toggleCrossFilter({ id: 'category', label: `Category: ${item.category}`, value: item.category })}
+                        onContextMenu={(e) => openContextMenu(e, '/detail/sales-returns', rowFilters('category', 'Category', item.category), item)}
                         className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('category') && isFiltered('category', item.category) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                       >
                         <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
@@ -1131,19 +1641,7 @@ export const SalesCommandCenter = () => {
         </>
       )}
 
-      {/* Context Menu */}
-      {contextMenu.visible && (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={closeContextMenu}
-          drillThroughTarget={contextMenu.page}
-          drillThroughContext={{
-            from: 'Sales Command Center',
-            filters: activeFilters,
-          }}
-        />
-      )}
+      {contextMenuElement}
     </div>
   );
 };

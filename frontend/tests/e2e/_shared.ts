@@ -1,4 +1,5 @@
-import { Page, Response, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
+import type { Page, Response } from '@playwright/test';
 
 /**
  * Wait until the page settles — last network call older than `idleMs`,

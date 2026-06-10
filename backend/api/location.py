@@ -5,14 +5,28 @@ from .permissions import DashboardPermission
 from rest_framework.response import Response
 
 from reports.models import ReportSales, ReportInventory
-from .helpers import parse_filters, apply_common_filters
+from .helpers import parse_filters, apply_common_filters, apply_dim_filters
+
+# Location page dimension → ReportSales column (DRILLTHROUGH_DESIGN.md §1).
+# category / channel / payment_method are already applied by
+# apply_common_filters (legacy keys), so only `month` needs a mapping here.
+LOC_DIMS = {
+    'month': 'sale_month',
+}
+
+
+def _loc_sales_qs(f):
+    """ReportSales filtered by the common window + location page dims."""
+    return apply_dim_filters(
+        apply_common_filters(ReportSales.objects.all(), f), f, LOC_DIMS,
+    )
 
 
 @api_view(['GET'])
 @permission_classes([DashboardPermission])
 def comparison(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _loc_sales_qs(f)
 
     data = list(
         qs.values('location_id', 'location_name')
@@ -37,7 +51,7 @@ def comparison(request):
 @permission_classes([DashboardPermission])
 def trend(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _loc_sales_qs(f)
 
     data = list(
         qs.values('sale_month', 'location_id', 'location_name')
@@ -63,7 +77,7 @@ def radar(request):
       - return_health_score  : 100 - returns_share (lower returns = better)
     """
     f = parse_filters(request)
-    sales_qs = apply_common_filters(ReportSales.objects.all(), f)
+    sales_qs = _loc_sales_qs(f)
 
     rows = list(
         sales_qs.values('location_id', 'location_name')
@@ -145,7 +159,7 @@ def radar(request):
 @permission_classes([DashboardPermission])
 def detail(request):
     f = parse_filters(request)
-    qs = apply_common_filters(ReportSales.objects.all(), f)
+    qs = _loc_sales_qs(f)
 
     data = list(
         qs.values('location_id', 'location_name', 'sale_month')

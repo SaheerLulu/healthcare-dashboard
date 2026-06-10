@@ -1,9 +1,12 @@
-import { useState, MouseEvent } from 'react';
-import { useNavigate } from 'react-router';
+import { useState } from 'react';
 import { KPICard } from '../components/KPICard';
 import { ChartCard } from '../components/ChartCard';
-import { ContextMenu } from '../components/ContextMenu';
+import { DrillSource } from '../contexts/DrillSourceContext';
+import { useDrillThrough } from '../hooks/useDrillThrough';
 import { useCrossFilter } from '../contexts/CrossFilterContext';
+import { useFilters } from '../contexts/FilterContext';
+import { DrillFilter } from '../utils/drill';
+import { formatIndianCurrencyAbbreviated } from '../utils/formatters';
 import {
   BarChart,
   Bar,
@@ -19,48 +22,212 @@ import {
   Legend,
   ResponsiveContainer,
   ComposedChart,
-  Area,
-  AreaChart,
 } from 'recharts';
 import { FileText, AlertCircle, CheckCircle } from 'lucide-react';
 import { useApiData } from '../hooks/useApiData';
-import { numericize } from '../services/transforms';
+import { numericize, monthLabel } from '../services/transforms';
 
 
 const COLORS = ['#0D9488', '#4F46E5', '#F59E0B', '#EF4444', '#10B981'];
 
+const GST_SOURCE = 'report_gst — unioned from accounting GSTR-1 / GSTR-3B / GSTR-2B / ITC / RCM registers';
+
+// Cross-filter dimension id → backend drill param (DRILLTHROUGH_DESIGN.md §1).
+// itcCategory has no backend dimension and is dropped on translation.
+const CROSS_TO_DRILL_ID: Record<string, string> = {
+  month: 'month',
+  rate: 'gst_rate',
+  supplier: 'supplier_name',
+  rcmSupplier: 'supplier_name',
+};
+
+/** Paginated detail endpoints return {results: [...]}; older ones a plain array. */
+const asRows = (d: any): any[] =>
+  Array.isArray(d) ? d : Array.isArray(d?.results) ? d.results : [];
+
+/** '2025-10' → 'Oct 25' (chart label); raw period is kept alongside for drills. */
+const monYY = (period: string): string =>
+  /^\d{4}-\d{2}/.test(period || '') ? `${monthLabel(period)} ${period.slice(2, 4)}` : period || '';
+
+const taxOf = (r: any): number =>
+  (Number(r.cgst) || 0) + (Number(r.sgst) || 0) + (Number(r.igst) || 0);
+
 export const GSTCompliance = () => {
   const [activeTab, setActiveTab] = useState<'gstr1' | 'gstr3b' | 'itc' | 'rcm'>('gstr1');
-  const navigate = useNavigate();
   const { toggleCrossFilter, activeFilters, isFiltered } = useCrossFilter();
-  const [contextMenu, setContextMenu] = useState<{
-    visible: boolean;
-    x: number;
-    y: number;
-    page: string;
-  }>({
-    visible: false,
-    x: 0,
-    y: 0,
-    page: '',
-  });
+  const { filters } = useFilters();
+  const { drillTo, openContextMenu, contextMenuElement } = useDrillThrough();
 
   // API integration
   const { data: apiGstOverview } = useApiData<any>('/gst/overview/', {});
-  const { data: apiGstr1 } = useApiData<any[]>('/gst/gstr1/', []);
-  const { data: apiGstr3b } = useApiData<any[]>('/gst/gstr3b/', []);
+  const { data: apiGstr1 } = useApiData<any>('/gst/gstr1/', []);
+  // gstr3b/rcm are paginated (default page 50); these page aggregates need
+  // the full window, so request the server cap explicitly.
+  const { data: apiGstr3b } = useApiData<any>('/gst/gstr3b/', [], { params: { page_size: 500 } });
   const { data: apiItc } = useApiData<any>('/gst/itc/', {});
-  const { data: apiRcm } = useApiData<any[]>('/gst/rcm/', []);
-  const { data: apiByRate } = useApiData<any[]>('/gst/by-rate/', []);
-  const { data: apiComplianceStatus } = useApiData<any[]>('/gst/compliance-status/', []);
+  const { data: apiRcm } = useApiData<any>('/gst/rcm/', [], { params: { page_size: 500 } });
+  const { data: apiByRate } = useApiData<any>('/gst/by-rate/', []);
+  const { data: apiComplianceStatus } = useApiData<any>('/gst/compliance-status/', []);
 
-  // Transform API data
-  const effectiveGstr1 = apiGstr1.map(numericize);
-  const effectiveGstr3b = apiGstr3b.map(numericize);
-  const effectiveItc = (apiItc.breakdown || []).map(numericize);
-  const effectiveByRate = apiByRate.map(numericize);
-  const effectiveRcm = apiRcm.map(numericize);
-  const effectiveComplianceStatus = apiComplianceStatus.map(numericize);
+  // ── Page-local adapters: rebuild chart shapes (and raw YYYY-MM periods)
+  //    from the API rows (DRILLTHROUGH_DESIGN.md §1 — drills carry raw month).
+
+  // GSTR-1: rows are {period, invoice_type, taxable, cgst, sgst, igst} —
+  // pivot to one row per month with b2b / b2c / export stacks.
+  const gstr1Raw = asRows(apiGstr1).map(numericize);
+  const effectiveGstr1 = (() => {
+    if (gstr1Raw.length && gstr1Raw[0].invoice_type === undefined && gstr1Raw[0].total !== undefined) {
+      return gstr1Raw; // legacy pre-pivoted shape
+    }
+    const byMonth: Record<string, any> = {};
+    for (const r of gstr1Raw) {
+      const period = String(r.period || r.month || '').slice(0, 7);
+      if (!period) continue;
+      if (!byMonth[period]) {
+        byMonth[period] = { period, month: monYY(period), b2b: 0, b2c: 0, export: 0, total: 0 };
+      }
+      const row = byMonth[period];
+      const tax = taxOf(r);
+      const t = String(r.invoice_type || '').toUpperCase();
+      if (t.startsWith('B2B')) row.b2b += tax;
+      else if (t.startsWith('B2C')) row.b2c += tax;
+      else if (t.startsWith('EXP')) row.export += tax;
+      row.total += tax;
+    }
+    return Object.keys(byMonth).sort().map((k) => byMonth[k]);
+  })();
+
+  // GSTR-3B: rows are {period, cgst.., itc_*, net_payable_*, filing_status} —
+  // aggregate per month across locations.
+  const gstr3bRaw = asRows(apiGstr3b).map(numericize);
+  const effectiveGstr3b = (() => {
+    const byMonth: Record<string, any> = {};
+    for (const r of gstr3bRaw) {
+      const period = String(r.period || r.month || '').slice(0, 7);
+      if (!period) continue;
+      if (!byMonth[period]) {
+        byMonth[period] = { period, month: monYY(period), output: 0, itc: 0, payable: 0, filed: true };
+      }
+      const row = byMonth[period];
+      row.output += Number(r.output) || taxOf(r);
+      row.itc +=
+        Number(r.itc) ||
+        (Number(r.itc_cgst) || 0) + (Number(r.itc_sgst) || 0) + (Number(r.itc_igst) || 0);
+      row.payable +=
+        Number(r.payable) ||
+        (Number(r.net_payable_cgst) || 0) +
+          (Number(r.net_payable_sgst) || 0) +
+          (Number(r.net_payable_igst) || 0);
+      if ((r.filing_status || r.status) !== 'filed') row.filed = false;
+    }
+    return Object.keys(byMonth)
+      .sort()
+      .map((k) => {
+        const row = byMonth[k];
+        return { ...row, status: row.filed ? 'filed' : 'pending', paid: row.filed ? row.payable : 0 };
+      });
+  })();
+
+  // ITC: endpoint returns {eligible, ineligible, matched, unmatched, missing} amounts/counts.
+  const itcBreakdownRaw: any[] = Array.isArray(apiItc.breakdown)
+    ? apiItc.breakdown.map(numericize)
+    : [
+        { category: 'Eligible ITC', value: Number(apiItc.eligible) || 0 },
+        { category: 'Ineligible ITC', value: Number(apiItc.ineligible) || 0 },
+      ].filter((r) => r.value > 0);
+  const itcTotal = itcBreakdownRaw.reduce((s, r) => s + (Number(r.value) || 0), 0);
+  const effectiveItc = itcBreakdownRaw.map((r) => ({
+    ...r,
+    percent: r.percent ?? (itcTotal ? ((Number(r.value) || 0) / itcTotal) * 100 : 0),
+  }));
+
+  // RCM: rows are {period, supplier_name, taxable_value, cgst, sgst, igst} —
+  // aggregate per supplier.
+  const rcmRaw = asRows(apiRcm).map(numericize);
+  const effectiveRcm = (() => {
+    if (rcmRaw.length && rcmRaw[0].amount !== undefined && rcmRaw[0].supplier !== undefined) {
+      return rcmRaw; // legacy pre-aggregated shape
+    }
+    const bySupplier: Record<string, any> = {};
+    for (const r of rcmRaw) {
+      const supplier = r.supplier_name || r.supplier || 'Unknown';
+      if (!bySupplier[supplier]) {
+        bySupplier[supplier] = { supplier, supplier_name: supplier, amount: 0, gst: 0, period: '', month: '' };
+      }
+      const row = bySupplier[supplier];
+      row.amount += Number(r.taxable_value) || 0;
+      row.gst += taxOf(r);
+      const period = String(r.period || '').slice(0, 7);
+      if (period > row.period) {
+        row.period = period;
+        row.month = monYY(period);
+      }
+    }
+    return Object.values(bySupplier).sort((a: any, b: any) => b.gst - a.gst);
+  })();
+
+  // By-rate: rows are {gst_rate, count, taxable, total_tax}.
+  const effectiveByRate = asRows(apiByRate)
+    .map(numericize)
+    .map((r: any) => ({
+      ...r,
+      gst_rate: r.gst_rate ?? (typeof r.rate === 'string' ? parseFloat(r.rate) : r.rate),
+      rate: r.gst_rate !== undefined && r.gst_rate !== null ? `${r.gst_rate}%` : r.rate,
+      base: r.base ?? r.taxable ?? 0,
+      gst: r.gst ?? r.total_tax ?? 0,
+    }));
+
+  // Compliance status: rows are {period, filing_status, filed_date, location_name}.
+  // GSTR-3B is due on the 20th of the following month.
+  const now = new Date();
+  const effectiveComplianceStatus = asRows(apiComplianceStatus)
+    .map(numericize)
+    .map((r: any) => {
+      if (r.return || r.return_type) return r; // legacy shape
+      const period = String(r.period || '').slice(0, 7);
+      const [y, m] = period.split('-').map(Number);
+      let dueDate = '';
+      let daysLeft = 0;
+      if (y && m) {
+        const due = new Date(y, m, 20);
+        dueDate = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-20`;
+        daysLeft = Math.max(0, Math.ceil((due.getTime() - now.getTime()) / 86400000));
+      }
+      const filed = r.filing_status === 'filed';
+      return {
+        ...r,
+        return: 'GSTR-3B',
+        period,
+        dueDate,
+        status: filed ? 'filed' : 'pending',
+        daysLeft,
+        filedOn: r.filed_date || '',
+      };
+    });
+
+  // KPI numbers (legacy *_display fields win when the API provides them).
+  const outputGst = Number(apiGstOverview.output_gst) || 0;
+  const itcAmount = Number(apiGstOverview.input_tax_credit ?? apiGstOverview.itc) || 0;
+  const netPayable = Number(apiGstOverview.net_liability ?? apiGstOverview.payable) || 0;
+  const pendingReturns = Number(apiGstOverview.filings_pending ?? apiGstOverview.pending_returns) || 0;
+  const filedCount = effectiveComplianceStatus.filter((r: any) => r.status === 'filed').length;
+  const complianceRate = effectiveComplianceStatus.length
+    ? (filedCount / effectiveComplianceStatus.length) * 100
+    : 0;
+
+  // BUG FIX: table titles used to hardcode 'Mar 2026' — derive the label from
+  // the active date-filter window instead.
+  const fmtMonthYear = (iso: string): string => {
+    const m = /^(\d{4})-(\d{2})/.exec(iso || '');
+    return m ? `${monthLabel(`${m[1]}-${m[2]}`)} ${m[1]}` : '';
+  };
+  const windowLabel = (() => {
+    const s = fmtMonthYear(filters.dateRange.start);
+    const e = fmtMonthYear(filters.dateRange.end);
+    if (!s && !e) return '';
+    if (s === e) return s;
+    return `${s} – ${e}`;
+  })();
 
   const tabs = [
     { id: 'gstr1', label: 'GSTR-1 (Sales)' },
@@ -68,20 +235,6 @@ export const GSTCompliance = () => {
     { id: 'itc', label: 'ITC Analysis' },
     { id: 'rcm', label: 'Reverse Charge' },
   ];
-
-  const handleChartRightClick = (e: MouseEvent, page: string) => {
-    e.preventDefault();
-    setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      page,
-    });
-  };
-
-  const closeContextMenu = () => {
-    setContextMenu(prev => ({ ...prev, visible: false }));
-  };
 
   const handleChartSelect = (data: any, dimension: string) => {
     if (data?.activePayload?.[0]) {
@@ -93,16 +246,45 @@ export const GSTCompliance = () => {
 
   const hasFilter = (dimension: string) => activeFilters.some(f => f.id === dimension);
 
-  const handleDrillThrough = (page: string, filter?: any) => {
-    navigate(page, {
-      state: {
-        drillThrough: {
-          from: 'GST & Compliance Center',
-          filters: activeFilters.length > 0 ? activeFilters : filter ? [filter] : [],
-        },
-      },
-    });
-  };
+  // Month chart labels ('Oct 25') → raw 'YYYY-MM' for drill params.
+  const rawMonthByLabel: Record<string, string> = {};
+  for (const r of [...effectiveGstr1, ...effectiveGstr3b]) {
+    if (r.period && r.month) rawMonthByLabel[r.month] = r.period;
+  }
+
+  // Active cross-filters translated to backend drill params (rule §1).
+  const crossDrillFilters = (): DrillFilter[] =>
+    activeFilters
+      .map((f): DrillFilter | null => {
+        const id = CROSS_TO_DRILL_ID[f.id];
+        if (!id) return null; // e.g. itcCategory — no backend dimension
+        let value = String(f.value);
+        if (f.id === 'month') {
+          const raw = /^\d{4}-\d{2}/.test(value) ? value.slice(0, 7) : rawMonthByLabel[value];
+          if (!raw) return null;
+          value = raw;
+        }
+        if (f.id === 'rate') value = value.replace('%', '');
+        return { id, label: f.label, value };
+      })
+      .filter((f): f is DrillFilter => !!f);
+
+  const sourceFilter = (table: string, label: string): DrillFilter => ({
+    id: 'source_table',
+    label: `Register: ${label}`,
+    value: table,
+  });
+
+  /** Chart-level drill filters: register + this page's active cross-filters. */
+  const drillWithSource = (table: string, label: string) => (): DrillFilter[] => [
+    sourceFilter(table, label),
+    ...crossDrillFilters(),
+  ];
+
+  const monthFilter = (item: any): DrillFilter[] =>
+    item.period
+      ? [{ id: 'month', label: `Month: ${item.month || item.period}`, value: item.period }]
+      : [];
 
   // Apply cross-filtering
   const filteredGSTR1 = effectiveGstr1.filter(item =>
@@ -113,7 +295,15 @@ export const GSTCompliance = () => {
     !activeFilters.length || activeFilters.some(f => f.value === item.month)
   );
 
+  // Net GST Payable waterfall (GSTR-3B tab).
+  const waterfallData = [
+    { label: 'Output GST', amount: outputGst, color: '#0D9488' },
+    { label: 'Input Tax Credit', amount: -itcAmount, color: '#4F46E5' },
+    { label: 'Net Payable', amount: netPayable || outputGst - itcAmount, color: '#EF4444' },
+  ];
+
   return (
+    <DrillSource name="GST & Compliance Center">
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">GST & Compliance Center</h1>
@@ -131,37 +321,69 @@ export const GSTCompliance = () => {
       <div className="grid grid-cols-5 gap-4 mb-6">
         <KPICard
           title="Output GST"
-          value={apiGstOverview.output_gst_display || '₹0'}
-          subtitle={apiGstOverview.output_gst_period || ''}
+          value={apiGstOverview.output_gst_display || formatIndianCurrencyAbbreviated(outputGst)}
+          subtitle={apiGstOverview.output_gst_period || windowLabel}
           trend={{ value: apiGstOverview.output_gst_trend || '0%', direction: 'up' }}
-          onClick={() => handleDrillThrough('/detail/gst')}
+          onClick={() => drillTo('/detail/gst', [sourceFilter('gstr1', 'GSTR-1'), ...crossDrillFilters()])}
           icon={<FileText className="w-5 h-5 text-teal-600" />}
+          info={{
+            formula: 'Σ (CGST + SGST + IGST) on GSTR-1 outward supply lines in the selected window',
+            source: GST_SOURCE,
+          }}
         />
         <KPICard
           title="Input Tax Credit"
-          value={apiGstOverview.itc_display || '₹0'}
-          subtitle={apiGstOverview.itc_subtitle || ''}
+          value={apiGstOverview.itc_display || formatIndianCurrencyAbbreviated(itcAmount)}
+          subtitle={apiGstOverview.itc_subtitle || windowLabel}
           trend={{ value: apiGstOverview.itc_trend || '0%', direction: 'up' }}
+          onClick={() => drillTo('/detail/gst', [sourceFilter('itc,gstr2b', 'ITC / GSTR-2B'), ...crossDrillFilters()])}
           icon={<CheckCircle className="w-5 h-5 text-green-600" />}
+          info={{
+            formula: 'Σ ITC heads (CGST + SGST + IGST) from GSTR-3B summaries in the window',
+            source: GST_SOURCE,
+            notes: 'When no GSTR-3B summary exists for the window, ITC falls back to Σ tax on GSTR-2B inward supplies.',
+          }}
         />
         <KPICard
           title="GST Payable"
-          value={apiGstOverview.payable_display || '₹0'}
-          subtitle={apiGstOverview.payable_subtitle || ''}
+          value={apiGstOverview.payable_display || formatIndianCurrencyAbbreviated(netPayable)}
+          subtitle={apiGstOverview.payable_subtitle || windowLabel}
           trend={{ value: apiGstOverview.payable_trend || '0%', direction: 'up' }}
+          onClick={() => drillTo('/detail/gst', [sourceFilter('gstr3b', 'GSTR-3B'), ...crossDrillFilters()])}
           icon={<AlertCircle className="w-5 h-5 text-red-600" />}
+          info={{
+            formula: 'Σ net payable (CGST + SGST + IGST) from GSTR-3B summaries in the window',
+            source: GST_SOURCE,
+            notes: 'When no GSTR-3B summary exists, payable is derived as max(Output GST − ITC, 0).',
+          }}
         />
         <KPICard
           title="Pending Returns"
-          value={String(apiGstOverview.pending_returns ?? 0)}
-          subtitle={apiGstOverview.pending_returns_subtitle || ''}
+          value={String(pendingReturns)}
+          subtitle={apiGstOverview.pending_returns_subtitle || windowLabel}
           trend={{ value: '0', direction: 'up' }}
+          onClick={() =>
+            drillTo('/detail/gst', [
+              { id: 'filing_status', label: 'Filing status: draft', value: 'draft' },
+              ...crossDrillFilters(),
+            ])
+          }
+          info={{
+            formula: 'Count of GSTR-3B summaries in the window with filing_status = draft',
+            source: GST_SOURCE,
+          }}
         />
         <KPICard
           title="Compliance Rate"
-          value={apiGstOverview.compliance_rate_display || '0%'}
-          subtitle={apiGstOverview.compliance_rate_subtitle || ''}
+          value={apiGstOverview.compliance_rate_display || `${complianceRate.toFixed(0)}%`}
+          subtitle={apiGstOverview.compliance_rate_subtitle || `${filedCount}/${effectiveComplianceStatus.length} returns filed`}
           trend={{ value: apiGstOverview.compliance_rate_trend || '0%', direction: 'up' }}
+          onClick={() => drillTo('/detail/gst', [sourceFilter('gstr3b', 'GSTR-3B'), ...crossDrillFilters()])}
+          info={{
+            formula: 'Filed GSTR-3B returns ÷ returns due in the window × 100',
+            source: GST_SOURCE,
+            notes: 'Computed client-side from GSTR-3B filing-status rows; due dates assume the standard 20th-of-following-month GSTR-3B deadline.',
+          }}
         />
       </div>
 
@@ -188,12 +410,22 @@ export const GSTCompliance = () => {
           <div className="grid grid-cols-2 gap-4 mb-6">
             <ChartCard
               title="GSTR-1 Output GST Trend"
-              onDrillThrough={() => handleDrillThrough('/detail/gst')}
+              data={filteredGSTR1}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'b2b', label: 'B2B GST', format: formatIndianCurrencyAbbreviated },
+                { key: 'b2c', label: 'B2C GST', format: formatIndianCurrencyAbbreviated },
+                { key: 'export', label: 'Export GST', format: formatIndianCurrencyAbbreviated },
+                { key: 'total', label: 'Total Output GST', format: formatIndianCurrencyAbbreviated },
+              ]}
+              drillTarget="/detail/gst"
+              drillFilters={drillWithSource('gstr1', 'GSTR-1')}
+              info={{
+                formula: 'Monthly Σ (CGST + SGST + IGST) on GSTR-1 outward supplies, stacked by invoice type (B2B / B2C / Export)',
+                source: GST_SOURCE,
+                notes: 'Other invoice types (e.g. credit notes) are included in the Total line but not in the stacked bars.',
+              }}
             >
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/gst')}
-                className="cursor-context-menu"
-              >
               <ResponsiveContainer width="100%" height={300}>
                 <ComposedChart
                   data={filteredGSTR1}
@@ -220,14 +452,24 @@ export const GSTCompliance = () => {
                   />
                 </ComposedChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Output GST by Tax Rate">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/gst')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Output GST by Tax Rate"
+              data={effectiveByRate}
+              columns={[
+                { key: 'rate', label: 'GST Rate' },
+                { key: 'base', label: 'Base Amount', format: formatIndianCurrencyAbbreviated },
+                { key: 'gst', label: 'GST Amount', format: formatIndianCurrencyAbbreviated },
+                { key: 'count', label: 'Lines' },
+              ]}
+              drillTarget="/detail/gst"
+              drillFilters={drillWithSource('gstr1', 'GSTR-1')}
+              info={{
+                formula: 'Σ taxable value (base) and Σ (CGST + SGST + IGST) on GSTR-1 lines, grouped by GST rate',
+                source: GST_SOURCE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={effectiveByRate}
@@ -240,7 +482,7 @@ export const GSTCompliance = () => {
                     tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}K`}
                   />
                   <Tooltip
-                    formatter={(value: any, name: string) => {
+                    formatter={(value: any) => {
                       return `₹${(value / 1000).toFixed(2)}K`;
                     }}
                   />
@@ -249,7 +491,6 @@ export const GSTCompliance = () => {
                   <Bar dataKey="gst" fill="#EF4444" name="GST Amount" />
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -278,6 +519,14 @@ export const GSTCompliance = () => {
                           value: item.month,
                         });
                       }}
+                      onContextMenu={(e) =>
+                        openContextMenu(
+                          e,
+                          '/detail/gst',
+                          [sourceFilter('gstr1', 'GSTR-1'), ...monthFilter(item)],
+                          item,
+                        )
+                      }
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('month') && isFiltered('month', item.month) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
@@ -306,11 +555,22 @@ export const GSTCompliance = () => {
       {activeTab === 'gstr3b' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="GST Computation Trend">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/gst')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="GST Computation Trend"
+              data={filteredGSTR3B}
+              columns={[
+                { key: 'month', label: 'Month' },
+                { key: 'output', label: 'Output GST', format: formatIndianCurrencyAbbreviated },
+                { key: 'itc', label: 'Input Tax Credit', format: formatIndianCurrencyAbbreviated },
+                { key: 'payable', label: 'GST Payable', format: formatIndianCurrencyAbbreviated },
+              ]}
+              drillTarget="/detail/gst"
+              drillFilters={drillWithSource('gstr3b', 'GSTR-3B')}
+              info={{
+                formula: 'Per month from GSTR-3B summaries: Output GST = Σ (CGST + SGST + IGST); ITC = Σ ITC heads; Payable = Σ net-payable heads',
+                source: GST_SOURCE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <LineChart
                   data={filteredGSTR3B}
@@ -350,43 +610,39 @@ export const GSTCompliance = () => {
                   />
                 </LineChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Net GST Payable">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/gst')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Net GST Payable"
+              data={waterfallData}
+              columns={[
+                { key: 'label', label: 'Component' },
+                { key: 'amount', label: 'Amount', format: formatIndianCurrencyAbbreviated },
+              ]}
+              drillTarget="/detail/gst"
+              drillFilters={crossDrillFilters}
+              info={{
+                formula: 'Net payable = Output GST (GSTR-1) − Input Tax Credit, shown as a three-step waterfall',
+                source: GST_SOURCE,
+                notes: 'When no GSTR-3B summary exists for the window, ITC falls back to GSTR-2B and net payable to max(Output − ITC, 0).',
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
-                {(() => {
-                  const outputVal = Number(apiGstOverview.output_gst) || 0;
-                  const itcVal = Number(apiGstOverview.itc) || 0;
-                  const netPayable = Number(apiGstOverview.payable) || (outputVal - itcVal);
-                  const waterfallData = [
-                    { label: 'Output GST', amount: outputVal, color: '#0D9488' },
-                    { label: 'Input Tax Credit', amount: -itcVal, color: '#4F46E5' },
-                    { label: 'Net Payable', amount: netPayable, color: '#EF4444' },
-                  ];
-                  return (
-                    <BarChart data={waterfallData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis dataKey="label" tick={{ fontSize: 12 }} />
-                      <YAxis
-                        tick={{ fontSize: 12 }}
-                        tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}K`}
-                      />
-                      <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(2)}K`} />
-                      <Bar dataKey="amount">
-                        {waterfallData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  );
-                })()}
+                <BarChart data={waterfallData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                  <YAxis
+                    tick={{ fontSize: 12 }}
+                    tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}K`}
+                  />
+                  <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(2)}K`} />
+                  <Bar dataKey="amount">
+                    {waterfallData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Bar>
+                </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
@@ -416,6 +672,14 @@ export const GSTCompliance = () => {
                           value: item.month,
                         });
                       }}
+                      onContextMenu={(e) =>
+                        openContextMenu(
+                          e,
+                          '/detail/gst',
+                          [sourceFilter('gstr3b', 'GSTR-3B'), ...monthFilter(item)],
+                          item,
+                        )
+                      }
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('month') && isFiltered('month', item.month) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.month}</td>
@@ -456,11 +720,21 @@ export const GSTCompliance = () => {
       {activeTab === 'itc' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="ITC Utilization">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/gst')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="ITC Utilization"
+              data={effectiveItc}
+              columns={[
+                { key: 'category', label: 'Category' },
+                { key: 'value', label: 'Amount', format: formatIndianCurrencyAbbreviated },
+                { key: 'percent', label: '% of Total' },
+              ]}
+              drillTarget="/detail/gst"
+              drillFilters={drillWithSource('itc,gstr2b', 'ITC / GSTR-2B')}
+              info={{
+                formula: 'Σ (CGST + SGST + IGST) on GSTR-2B / ITC register rows, split by itc_eligible flag',
+                source: GST_SOURCE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie
@@ -494,14 +768,23 @@ export const GSTCompliance = () => {
                   <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(2)}K`} />
                 </PieChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="ITC Status Breakdown">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/gst')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="ITC Status Breakdown"
+              data={effectiveItc}
+              columns={[
+                { key: 'category', label: 'Category' },
+                { key: 'value', label: 'Amount', format: formatIndianCurrencyAbbreviated },
+                { key: 'percent', label: '% of Total' },
+              ]}
+              drillTarget="/detail/gst"
+              drillFilters={drillWithSource('itc,gstr2b', 'ITC / GSTR-2B')}
+              info={{
+                formula: 'Eligible vs ineligible ITC amounts: Σ (CGST + SGST + IGST) grouped by the itc_eligible flag',
+                source: GST_SOURCE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={effectiveItc}
@@ -524,13 +807,14 @@ export const GSTCompliance = () => {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
           {/* ITC Table */}
           <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-4">Input Tax Credit Analysis (Mar 2026)</h3>
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">
+              Input Tax Credit Analysis{windowLabel ? ` (${windowLabel})` : ''}
+            </h3>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
@@ -552,6 +836,14 @@ export const GSTCompliance = () => {
                           value: item.category,
                         });
                       }}
+                      onContextMenu={(e) =>
+                        openContextMenu(
+                          e,
+                          '/detail/gst',
+                          [sourceFilter('itc,gstr2b', 'ITC / GSTR-2B'), ...crossDrillFilters()],
+                          item,
+                        )
+                      }
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('itcCategory') && isFiltered('itcCategory', item.category) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.category}</td>
@@ -599,11 +891,22 @@ export const GSTCompliance = () => {
       {activeTab === 'rcm' && (
         <>
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <ChartCard title="RCM Liability by Supplier">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/gst')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="RCM Liability by Supplier"
+              data={effectiveRcm}
+              columns={[
+                { key: 'supplier', label: 'Supplier' },
+                { key: 'amount', label: 'Base Amount', format: formatIndianCurrencyAbbreviated },
+                { key: 'gst', label: 'GST Payable', format: formatIndianCurrencyAbbreviated },
+                { key: 'month', label: 'Latest Period' },
+              ]}
+              drillTarget="/detail/gst"
+              drillFilters={drillWithSource('rcm', 'RCM')}
+              info={{
+                formula: 'Per supplier: Σ taxable value (base) and Σ (CGST + SGST + IGST) payable under reverse charge',
+                source: GST_SOURCE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
                   data={effectiveRcm}
@@ -627,14 +930,22 @@ export const GSTCompliance = () => {
                   <Bar dataKey="gst" fill="#EF4444" name="GST Payable" />
                 </BarChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
 
-            <ChartCard title="Total RCM Liability">
-              <div
-                onContextMenu={(e) => handleChartRightClick(e, '/detail/gst')}
-                className="cursor-context-menu"
-              >
+            <ChartCard
+              title="Total RCM Liability"
+              data={effectiveRcm}
+              columns={[
+                { key: 'supplier', label: 'Supplier' },
+                { key: 'gst', label: 'GST Payable', format: formatIndianCurrencyAbbreviated },
+              ]}
+              drillTarget="/detail/gst"
+              drillFilters={drillWithSource('rcm', 'RCM')}
+              info={{
+                formula: 'Share of total reverse-charge GST payable, by supplier: Σ (CGST + SGST + IGST)',
+                source: GST_SOURCE,
+              }}
+            >
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie
@@ -668,13 +979,14 @@ export const GSTCompliance = () => {
                   <Tooltip formatter={(value: any) => `₹${(value / 1000).toFixed(2)}K`} />
                 </PieChart>
               </ResponsiveContainer>
-              </div>
             </ChartCard>
           </div>
 
           {/* RCM Table */}
           <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-4">Reverse Charge Mechanism (Mar 2026)</h3>
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">
+              Reverse Charge Mechanism{windowLabel ? ` (${windowLabel})` : ''}
+            </h3>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
@@ -697,6 +1009,18 @@ export const GSTCompliance = () => {
                           value: item.supplier,
                         });
                       }}
+                      onContextMenu={(e) =>
+                        openContextMenu(
+                          e,
+                          '/detail/gst',
+                          [
+                            sourceFilter('rcm', 'RCM'),
+                            { id: 'supplier_name', label: `Supplier: ${item.supplier}`, value: item.supplier },
+                            ...monthFilter(item),
+                          ],
+                          item,
+                        )
+                      }
                       className={`border-b border-gray-100 cursor-pointer transition-colors ${hasFilter('rcmSupplier') && isFiltered('rcmSupplier', item.supplier) ? 'bg-teal-100 ring-1 ring-teal-400' : 'hover:bg-teal-50'}`}
                     >
                       <td className="py-2 px-2 font-medium text-gray-900">{item.supplier}</td>
@@ -754,7 +1078,21 @@ export const GSTCompliance = () => {
               {effectiveComplianceStatus.map((item: any, index: number) => (
                 <tr
                   key={`${item.return}-${item.period}-${index}`}
-                  className="border-b border-gray-100 hover:bg-teal-50 transition-colors"
+                  onContextMenu={(e) =>
+                    openContextMenu(
+                      e,
+                      '/detail/gst',
+                      [
+                        sourceFilter('gstr3b', 'GSTR-3B'),
+                        ...monthFilter(item),
+                        ...(item.filing_status
+                          ? [{ id: 'filing_status', label: `Filing status: ${item.filing_status}`, value: String(item.filing_status) }]
+                          : []),
+                      ],
+                      item,
+                    )
+                  }
+                  className="border-b border-gray-100 hover:bg-teal-50 transition-colors cursor-context-menu"
                 >
                   <td className="py-2 px-2 font-medium text-gray-900">{item.return || item.return_type || ''}</td>
                   <td className="py-2 px-2 text-gray-900">{item.period || ''}</td>
@@ -779,19 +1117,8 @@ export const GSTCompliance = () => {
         </div>
       </div>
 
-      {/* Context Menu */}
-      {contextMenu.visible && (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={closeContextMenu}
-          drillThroughTarget={contextMenu.page}
-          drillThroughContext={{
-            from: 'GST & Compliance Center',
-            filters: activeFilters,
-          }}
-        />
-      )}
+      {contextMenuElement}
     </div>
+    </DrillSource>
   );
 };

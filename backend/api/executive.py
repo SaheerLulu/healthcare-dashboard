@@ -35,8 +35,17 @@ def kpis(request):
         total=Sum('debit') - Sum('credit')
     )['total'] or 0
 
-    # GST liability
-    gst_qs = ReportGST.objects.filter(source_table='gstr3b', period__gte=f['start_date'][:7])
+    # GST liability — both period bounds, so the KPI tracks the selected
+    # window instead of summing every filing from window-start onward.
+    gst_qs = ReportGST.objects.filter(
+        source_table='gstr3b',
+        period__gte=f['start_date'][:7],
+        period__lte=f['end_date'][:7],
+    )
+    if 'location_id' in f:
+        gst_qs = gst_qs.filter(location_id=f['location_id'])
+    elif 'location_ids' in f:
+        gst_qs = gst_qs.filter(location_id__in=f['location_ids'])
     gst_liability = gst_qs.aggregate(
         total=Sum('net_payable_cgst') + Sum('net_payable_sgst') + Sum('net_payable_igst')
     )['total'] or 0
@@ -206,30 +215,75 @@ def today_sales(request):
     })
 
 
+def _distinct(model, field):
+    """Non-empty distinct values of a column, sorted."""
+    vals = model.objects.values_list(field, flat=True).distinct().order_by(field)
+    return [v for v in vals if v not in (None, '')]
+
+
+def _distinct_entities(model, id_field, name_field):
+    """Distinct {id, name} pairs of an entity dimension, sorted by name."""
+    rows = (
+        model.objects.exclude(**{f'{id_field}__isnull': True})
+        .values(id_field, name_field).distinct().order_by(name_field)
+    )
+    return [
+        {'id': r[id_field], 'name': r[name_field] or f'#{r[id_field]}'}
+        for r in rows
+    ]
+
+
 @api_view(['GET'])
 @permission_classes([DashboardPermission])
 def filter_options(request):
-    """Return dynamic filter options from the database."""
+    """Dynamic filter options + data date bounds, all derived from the report
+    tables so the UI never offers a value that matches zero rows
+    (docs/DRILLTHROUGH_DESIGN.md §5). HTTP-cached 5 min by middleware.
+    """
+    from django.db.models import Min, Max
+    from reports.models import ReportSalesReturns, ReportTDS
+
     locations = list(
         ReportSales.objects.values('location_id', 'location_name')
         .distinct().order_by('location_id')
     )
-    categories = list(
-        ReportSales.objects.values_list('product_category', flat=True)
-        .distinct().order_by('product_category')
-    )
-    channels = list(
-        ReportSales.objects.values_list('channel', flat=True)
-        .distinct().order_by('channel')
-    )
-    payment_methods = list(
-        ReportSales.objects.values_list('payment_method', flat=True)
-        .distinct().order_by('payment_method')
-    )
+
+    # Slider bounds: the union of the three dated fact tables. `max` also
+    # feeds the rolling-month default anchor when the pipeline is stale.
+    sales_b = ReportSales.objects.aggregate(lo=Min('sale_date'), hi=Max('sale_date'))
+    purch_b = ReportPurchases.objects.aggregate(lo=Min('bill_date'), hi=Max('bill_date'))
+    fin_b = ReportFinancial.objects.aggregate(lo=Min('entry_date'), hi=Max('entry_date'))
+    los = [b['lo'] for b in (sales_b, purch_b, fin_b) if b['lo']]
+    his = [b['hi'] for b in (sales_b, purch_b, fin_b) if b['hi']]
 
     return Response({
         'locations': [{'id': str(l['location_id']), 'name': l['location_name'] or f"Location {l['location_id']}"} for l in locations],
-        'categories': [c for c in categories if c],
-        'channels': [c for c in channels if c],
-        'payment_methods': [p for p in payment_methods if p],
+        'categories': _distinct(ReportSales, 'product_category'),
+        'channels': _distinct(ReportSales, 'channel'),
+        'payment_methods': _distinct(ReportSales, 'payment_method'),
+        'date_bounds': {
+            'min': str(min(los)) if los else None,
+            'max': str(max(his)) if his else None,
+        },
+        'customer_types': _distinct(ReportSales, 'customer_type'),
+        'suppliers': _distinct_entities(ReportPurchases, 'supplier_id', 'supplier_name'),
+        'doctors': _distinct_entities(ReportSales, 'doctor_id', 'doctor_name'),
+        'specialities': _distinct(ReportSales, 'doctor_specialization'),
+        'companies': _distinct(ReportSales, 'product_company'),
+        'gst_rates': _distinct(ReportGST, 'gst_rate'),
+        'invoice_types': _distinct(ReportGST, 'invoice_type'),
+        'filing_statuses': _distinct(ReportGST, 'filing_status'),
+        'tds_sections': _distinct(ReportTDS, 'section'),
+        'tds_statuses': _distinct(ReportTDS, 'status'),
+        'po_states': _distinct(ReportPurchases, 'state'),
+        'voucher_types': _distinct(ReportFinancial, 'voucher_type'),
+        'account_types': _distinct(ReportFinancial, 'account_type'),
+        'account_subtypes': _distinct(ReportFinancial, 'account_subtype'),
+        'party_types': _distinct(ReportFinancial, 'party_type'),
+        'return_reasons': _distinct(ReportSalesReturns, 'reason'),
+        'return_types': _distinct(ReportSalesReturns, 'return_type'),
+        'expiry_statuses': _distinct(ReportInventory, 'expiry_status'),
+        'movement_statuses': _distinct(ReportInventory, 'movement_status'),
+        'abc_classes': _distinct(ReportInventory, 'abc_class'),
+        'ved_classes': _distinct(ReportInventory, 'product_ved_class'),
     })

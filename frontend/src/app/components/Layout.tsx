@@ -2,6 +2,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { Outlet } from 'react-router';
 import { FilterSidebar } from './FilterSidebar';
 import { TopBar } from './TopBar';
+import { GlobalDateBar } from './GlobalDateBar';
 import { SelectionToolbar } from './SelectionToolbar';
 import { useCrossFilter } from '../contexts/CrossFilterContext';
 import { useApiData } from '../hooks/useApiData';
@@ -75,6 +76,8 @@ export const Layout = () => {
           tabIndex={-1}
           className={`flex-1 min-w-0 transition-[margin-left] duration-300 ease-in-out ${sidebarOpen ? 'ml-[280px]' : 'ml-0'}`}
         >
+          <GlobalDateBar />
+
           {activeFilters.length > 0 && <SelectionToolbar />}
 
           <div className="p-6">
