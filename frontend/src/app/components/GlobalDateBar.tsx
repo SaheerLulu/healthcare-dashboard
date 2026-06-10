@@ -114,6 +114,45 @@ export const GlobalDateBar: React.FC = () => {
         />
       </div>
 
+      {/* Exact date pickers — same range as the slider, for precise input */}
+      <div className="flex items-center gap-1.5 flex-shrink-0" data-testid="date-inputs">
+        <input
+          type="date"
+          aria-label="Start date"
+          value={filters.dateRange.start}
+          min={dataMin}
+          max={filters.dateRange.end}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (!v) return;
+            const start = v < dataMin ? dataMin : v;
+            updateFilters({
+              dateRange: { start, end: start > filters.dateRange.end ? start : filters.dateRange.end },
+            });
+          }}
+          className="h-7 px-2 rounded-md text-[11px] outline-none"
+          style={{ border: '1px solid var(--line)', color: 'var(--ink-2)', backgroundColor: 'var(--surface-0)' }}
+        />
+        <span className="text-[11px]" style={{ color: 'var(--ink-3)' }}>→</span>
+        <input
+          type="date"
+          aria-label="End date"
+          value={filters.dateRange.end}
+          min={filters.dateRange.start}
+          max={boundMax}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (!v) return;
+            const end = v > boundMax ? boundMax : v;
+            updateFilters({
+              dateRange: { start: end < filters.dateRange.start ? end : filters.dateRange.start, end },
+            });
+          }}
+          className="h-7 px-2 rounded-md text-[11px] outline-none"
+          style={{ border: '1px solid var(--line)', color: 'var(--ink-2)', backgroundColor: 'var(--surface-0)' }}
+        />
+      </div>
+
       <div className="flex items-center gap-1 flex-shrink-0">
         {PRESETS.map(p => {
           const active = isPresetActive(p.key);

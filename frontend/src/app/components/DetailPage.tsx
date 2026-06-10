@@ -1,6 +1,6 @@
-import React, { ReactNode } from 'react';
+import React, { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { ArrowLeft, X, Download } from 'lucide-react';
+import { ArrowLeft, X, Download, Columns3, Check } from 'lucide-react';
 import { useDetailQuery } from '../hooks/useDetailQuery';
 import { useFilters } from '../contexts/FilterContext';
 import { CsvColumn } from '../utils/csv';
@@ -41,6 +41,52 @@ export const DetailPage: React.FC<DetailPageProps> = ({
   const { filters } = useFilters();
   const q = useDetailQuery(endpoint, defaultOrdering);
 
+  // Column visibility, persisted per detail page. Stored as the list of
+  // hidden keys so newly added columns default to visible.
+  const storageKey = `detail-hidden-cols:${endpoint}`;
+  const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      return new Set(Array.isArray(saved) ? saved : []);
+    } catch {
+      return new Set();
+    }
+  });
+  const toggleColumn = (key: string) => {
+    setHiddenKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else if (columns.length - next.size > 1) next.add(key); // keep ≥1 visible
+      try {
+        localStorage.setItem(storageKey, JSON.stringify([...next]));
+      } catch { /* storage full/blocked — selection just won't persist */ }
+      return next;
+    });
+  };
+  const visibleColumns = useMemo(
+    () => columns.filter(c => !hiddenKeys.has(c.key)),
+    [columns, hiddenKeys],
+  );
+
+  // Columns dropdown open/close (outside click + Escape).
+  const [colMenuOpen, setColMenuOpen] = useState(false);
+  const colMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!colMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (colMenuRef.current && !colMenuRef.current.contains(e.target as Node)) setColMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setColMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [colMenuOpen]);
+
   const fmt = (col: DetailColumn, row: any): ReactNode => {
     const v = row?.[col.key];
     if (col.render) return col.render(v, row);
@@ -57,7 +103,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({
   };
 
   const totals: Record<string, number> = {};
-  for (const col of columns) {
+  for (const col of visibleColumns) {
     if (col.total) {
       totals[col.key] = q.rows.reduce((sum, r) => sum + (Number(r?.[col.key]) || 0), 0);
     }
@@ -135,8 +181,55 @@ export const DetailPage: React.FC<DetailPageProps> = ({
           </p>
         </div>
         <div className="flex gap-2 flex-shrink-0">
+          <div className="relative" ref={colMenuRef}>
+            <button
+              onClick={() => setColMenuOpen(o => !o)}
+              title="Choose which columns are shown"
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap"
+            >
+              <Columns3 className="w-4 h-4 inline mr-2" />
+              Columns
+              {hiddenKeys.size > 0 && (
+                <span className="ml-1.5 text-xs text-teal-700 font-semibold">
+                  {visibleColumns.length}/{columns.length}
+                </span>
+              )}
+            </button>
+            {colMenuOpen && (
+              <div
+                className="absolute right-0 mt-1 w-56 max-h-80 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1"
+                role="menu"
+                aria-label="Toggle table columns"
+              >
+                {columns.map(col => {
+                  const visible = !hiddenKeys.has(col.key);
+                  const lastVisible = visible && visibleColumns.length === 1;
+                  return (
+                    <button
+                      key={col.key}
+                      onClick={() => toggleColumn(col.key)}
+                      disabled={lastVisible}
+                      title={lastVisible ? 'At least one column must stay visible' : undefined}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      role="menuitemcheckbox"
+                      aria-checked={visible}
+                    >
+                      <span
+                        className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                          visible ? 'bg-teal-600 border-teal-600 text-white' : 'border-gray-300'
+                        }`}
+                      >
+                        {visible && <Check className="w-3 h-3" />}
+                      </span>
+                      <span className="truncate">{col.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           <button
-            onClick={() => q.exportCsv(title.toLowerCase().replace(/\s+/g, '-'), columns)}
+            onClick={() => q.exportCsv(title.toLowerCase().replace(/\s+/g, '-'), visibleColumns)}
             title={q.exportCapped ? 'Exports the first 500 rows of the current query' : 'Export the current query as CSV'}
             className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap"
           >
@@ -152,13 +245,14 @@ export const DetailPage: React.FC<DetailPageProps> = ({
         </div>
       )}
 
-      {/* Data Table */}
+      {/* Data Table — min-w-max keeps wide tables at natural width so the
+          wrapper scrolls horizontally instead of squeezing columns. */}
       <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-max text-sm">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                {columns.map(col => (
+                {visibleColumns.map(col => (
                   <th
                     key={col.key}
                     onClick={col.sortKey ? () => q.setOrdering(col.sortKey!) : undefined}
@@ -174,7 +268,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({
             <tbody>
               {!q.loading && q.rows.length === 0 && (
                 <tr>
-                  <td colSpan={columns.length} className="py-10 text-center text-sm text-gray-400">
+                  <td colSpan={visibleColumns.length} className="py-10 text-center text-sm text-gray-400">
                     No records match the current filters
                   </td>
                 </tr>
@@ -184,7 +278,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({
                   key={index}
                   className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
                 >
-                  {columns.map(col => (
+                  {visibleColumns.map(col => (
                     <td
                       key={col.key}
                       className={`py-3 px-4 text-gray-900 whitespace-nowrap ${col.numeric ? 'text-right' : ''}`}
@@ -198,7 +292,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({
             {hasTotals && q.rows.length > 0 && (
               <tfoot className="bg-gray-50 border-t-2 border-gray-300">
                 <tr>
-                  {columns.map((col, i) => (
+                  {visibleColumns.map((col, i) => (
                     <td
                       key={col.key}
                       className={`py-3 px-4 font-bold text-gray-900 ${col.numeric ? 'text-right' : ''}`}

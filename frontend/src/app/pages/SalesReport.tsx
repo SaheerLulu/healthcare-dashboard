@@ -174,7 +174,7 @@ export const SalesReport = () => {
         {/* Bills Table */}
         <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-max text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   {sortableTh('invoice_no', 'Bill No')}
@@ -315,7 +315,7 @@ export const SalesReport = () => {
                   {linesLoading ? (
                     <div className="py-6 text-center text-sm text-gray-500">Loading line items…</div>
                   ) : (
-                    <table className="w-full text-sm">
+                    <table className="w-full min-w-max text-sm">
                       <thead className="bg-gray-50 border-b border-gray-200">
                         <tr>
                           <th className="text-left py-2 px-3 font-semibold text-gray-700">#</th>

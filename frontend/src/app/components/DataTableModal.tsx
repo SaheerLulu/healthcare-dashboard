@@ -100,7 +100,7 @@ export const DataTableModal: React.FC<DataTableModalProps> = ({
         </div>
 
         <div className="overflow-auto flex-1">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-max text-sm">
             <thead className="sticky top-0" style={{ backgroundColor: 'var(--surface-1)' }}>
               <tr>
                 {columns.map(col => (
