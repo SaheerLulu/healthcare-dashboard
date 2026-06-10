@@ -1,5 +1,5 @@
 import { lazy } from "react";
-import { createBrowserRouter } from "react-router";
+import { createBrowserRouter, Navigate } from "react-router";
 import { Layout } from "./components/Layout";
 
 /**
@@ -61,10 +61,22 @@ const AuditDetailData = lazyNamed(() => import("./pages/detail/AdditionalDetailP
 const ExpenseDetailData = lazyNamed(() => import("./pages/detail/AdditionalDetailPages"), "ExpenseDetailData");
 const SalesReturnsDetailData = lazyNamed(() => import("./pages/detail/AdditionalDetailPages"), "SalesReturnsDetailData");
 
+const Login = lazyNamed(() => import("./pages/Login"), "Login");
+
+// Same sign-in as the pharmacy/accounting apps (shared users + JWT key).
+// The api client redirects here whenever a request 401s.
+function ProtectedLayout() {
+  if (!localStorage.getItem("access_token")) {
+    return <Navigate to="/login" replace />;
+  }
+  return <Layout />;
+}
+
 export const router = createBrowserRouter([
+  { path: "/login", Component: Login },
   {
     path: "/",
-    Component: Layout,
+    Component: ProtectedLayout,
     children: [
       { index: true, Component: ExecutiveSummary },
       { path: "financial", Component: FinancialDeepDive },
