@@ -241,12 +241,25 @@ def filter_options(request):
     (docs/DRILLTHROUGH_DESIGN.md §5). HTTP-cached 5 min by middleware.
     """
     from django.db.models import Min, Max
+    from django.db.utils import OperationalError, ProgrammingError
     from reports.models import ReportSalesReturns, ReportTDS
+    from source_models.models import LocationRO
 
-    locations = list(
-        ReportSales.objects.values('location_id', 'location_name')
-        .distinct().order_by('location_id')
-    )
+    # Locations come from the source master, not the report rows: stores
+    # without transactions yet (new branches, warehouses) must still be
+    # offered in the filter. Falls back to report-derived names when the
+    # upstream table is unreachable (exception to DRILLTHROUGH_DESIGN §5
+    # by explicit product decision).
+    try:
+        locations = [
+            {'location_id': l.id, 'location_name': l.name}
+            for l in LocationRO.objects.filter(usage='internal').order_by('id')
+        ]
+    except (OperationalError, ProgrammingError):
+        locations = list(
+            ReportSales.objects.values('location_id', 'location_name')
+            .distinct().order_by('location_id')
+        )
 
     # Slider bounds: the union of the three dated fact tables. `max` also
     # feeds the rolling-month default anchor when the pipeline is stale.
