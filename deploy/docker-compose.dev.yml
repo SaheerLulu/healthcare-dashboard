@@ -39,20 +39,11 @@ services:
     expose:
       - "8002"
 
-  # ---- One-shot full pipeline on cold start ----
-  pipeline:
-    <<: *backend-base
-    container_name: dashboard-dev-pipeline
-    depends_on:
-      backend:
-        condition: service_healthy
-    command: ["python3", "manage.py", "run_all_pipelines"]
-    restart: "no"
-    # The image healthcheck probes gunicorn, which this service doesn't run.
-    healthcheck:
-      disable: true
-
   # ---- Periodic incremental ETL sync ----
+  # No separate one-shot pipeline service: the scheduler's first loop
+  # iteration runs immediately, and two concurrent run_all_pipelines
+  # invocations race on PipelineLog.update_or_create (no unique
+  # constraint on pipeline_type) and corrupt the log table.
   scheduler:
     <<: *backend-base
     container_name: dashboard-dev-scheduler
