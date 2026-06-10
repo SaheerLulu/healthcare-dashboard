@@ -77,6 +77,14 @@ def _recent_months(start_date_iso, end_date_iso):
     return periods[-12:]  # Cap to 12 months
 
 
+# Ledger COGS: the 5560 'Cost of Goods Sold' account and its per-store
+# children (their subtype is the generic Other_Expense in the COA, so the
+# code prefix is the reliable marker). The P&L takes COGS from ReportSales —
+# counting these ledger postings as operating expense double-deducts the
+# cost of goods.
+_LEDGER_COGS_Q = Q(account_subtype='Purchases') | Q(account_code__startswith='5560')
+
+
 @api_view(['GET'])
 @permission_classes([DashboardPermission])
 def pnl(request):
@@ -96,7 +104,7 @@ def pnl(request):
     gross_profit = float(sales_agg['gross_margin'] or 0)
     cogs = revenue - gross_profit
 
-    expenses = float(qs.filter(account_type='EXPENSE').exclude(account_subtype='Purchases').aggregate(total=Sum('debit') - Sum('credit'))['total'] or 0)
+    expenses = float(qs.filter(account_type='EXPENSE').exclude(_LEDGER_COGS_Q).aggregate(total=Sum('debit') - Sum('credit'))['total'] or 0)
     net_profit = gross_profit - expenses
 
     return Response({
@@ -130,7 +138,7 @@ def pnl_trend(request):
     }
     expense_trend = {
         r['entry_month']: float(r['v'] or 0)
-        for r in qs.filter(account_type='EXPENSE')
+        for r in qs.filter(account_type='EXPENSE').exclude(_LEDGER_COGS_Q)
         .values('entry_month')
         .annotate(v=Sum('debit') - Sum('credit'))
     }
@@ -163,7 +171,8 @@ def expense_breakdown(request):
     qs = _fin_qs(ReportFinancial.objects.filter(is_posted=True, account_type='EXPENSE'), f)
 
     data = list(
-        qs.values('account_name', 'account_code', 'account_subtype')
+        qs.exclude(_LEDGER_COGS_Q)
+        .values('account_name', 'account_code', 'account_subtype')
         .annotate(amount=Sum('debit') - Sum('credit'))
         .order_by('-amount')
     )
@@ -433,7 +442,7 @@ def profit_bridge(request):
 
     # Individual expense categories (excluding COGS/Purchases)
     expense_cats = list(
-        qs.filter(account_type='EXPENSE').exclude(account_subtype='Purchases')
+        qs.filter(account_type='EXPENSE').exclude(_LEDGER_COGS_Q)
         .values('account_subtype')
         .annotate(amount=Sum('debit') - Sum('credit'))
         .order_by('-amount')
@@ -469,7 +478,7 @@ def expense_detail(request):
     )
     qs = _fin_qs(
         ReportFinancial.objects.filter(is_posted=True, account_type='EXPENSE'), f
-    ).values(*columns)
+    ).exclude(_LEDGER_COGS_Q).values(*columns)
     qs = apply_ordering(qs, f, allowed=columns, default='-entry_date')
     return paginate_detail(request, qs)
 
