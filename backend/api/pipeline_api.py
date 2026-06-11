@@ -49,16 +49,18 @@ def trigger_pipeline(request):
     """Trigger all pipelines. Runs in background thread."""
     global _pipeline_running
 
-    if _pipeline_running['active']:
-        return Response({
-            'status': 'already_running',
-            'message': 'A pipeline is already running.',
-            'progress': _pipeline_running['progress'],
-        }, status=409)
+    full = bool(request.data.get('full', False))
 
-    full = request.data.get('full', False)
-
+    # Check-and-set must happen atomically inside the lock, otherwise two
+    # concurrent POSTs can both pass the "already running" check and start
+    # duplicate pipeline runs against the same report tables.
     with _pipeline_lock:
+        if _pipeline_running['active']:
+            return Response({
+                'status': 'already_running',
+                'message': 'A pipeline is already running.',
+                'progress': _pipeline_running['progress'],
+            }, status=409)
         _pipeline_running['active'] = True
         _pipeline_running['progress'] = 'Starting...'
         _pipeline_running['result'] = None

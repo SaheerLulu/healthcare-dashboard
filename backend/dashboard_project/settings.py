@@ -12,8 +12,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------
 # Security – same key as inventory & accounting for JWT SSO
 # ---------------------------------------------------------------------------
+DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('true', '1', 'yes')
+
 _SECRET_KEY_ENV = os.environ.get('DJANGO_SECRET_KEY')
 if not _SECRET_KEY_ENV:
+    if not DEBUG:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(
+            'DJANGO_SECRET_KEY must be set when DJANGO_DEBUG is off. '
+            'The hardcoded fallback key is for local development only.'
+        )
     import warnings
     warnings.warn(
         "DJANGO_SECRET_KEY not set. Using insecure fallback – dev only.",
@@ -21,9 +29,18 @@ if not _SECRET_KEY_ENV:
     )
 SECRET_KEY = _SECRET_KEY_ENV or 'django-insecure--3fejku$$i93u7o15lm79*vl1tve0*tsl8em6hx1x8y4@=k4hr'
 
-DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('true', '1', 'yes')
-
-ALLOWED_HOSTS = ['*']
+# Comma-separated host list, e.g. DJANGO_ALLOWED_HOSTS=dash.example.com,10.0.0.5
+_ALLOWED_HOSTS_ENV = os.environ.get('DJANGO_ALLOWED_HOSTS', '')
+if _ALLOWED_HOSTS_ENV:
+    ALLOWED_HOSTS = [h.strip() for h in _ALLOWED_HOSTS_ENV.split(',') if h.strip()]
+elif DEBUG:
+    ALLOWED_HOSTS = ['*']  # dev convenience only
+else:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured(
+        'DJANGO_ALLOWED_HOSTS must be set when DJANGO_DEBUG is off '
+        '(wildcard "*" is not a safe production default).'
+    )
 
 # ---------------------------------------------------------------------------
 # Application definition
@@ -148,9 +165,15 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # ---------------------------------------------------------------------------
-# CORS
+# CORS – wide-open only in dev; production must whitelist origins via env,
+# e.g. CORS_ALLOWED_ORIGINS=https://dash.example.com,https://app.example.com
 # ---------------------------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = True
+_CORS_ORIGINS_ENV = os.environ.get('CORS_ALLOWED_ORIGINS', '')
+if _CORS_ORIGINS_ENV:
+    CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOWED_ORIGINS = [o.strip() for o in _CORS_ORIGINS_ENV.split(',') if o.strip()]
+else:
+    CORS_ALLOW_ALL_ORIGINS = DEBUG
 
 # ---------------------------------------------------------------------------
 # REST Framework
