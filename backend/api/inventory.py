@@ -351,58 +351,57 @@ def movement_detail(request):
         s_qs = s_qs.filter(product_category=f['category'])
         sr_qs = sr_qs.filter(product_category=f['category'])
 
-    rows = []
-    for r in p_qs.values(
-        'bill_date', 'product_name', 'product_category', 'quantity',
-        'line_total', 'location_name', 'bill_no', 'batch_no',
-    ):
-        rows.append({
-            'date': r['bill_date'].isoformat() if r['bill_date'] else '',
-            'type': 'Purchase',
-            'product': r['product_name'],
-            'category': r['product_category'],
-            'qty': int(r['quantity'] or 0),
-            'value': float(r['line_total'] or 0),
-            'location': r['location_name'],
-            'reference': r['bill_no'],
-            'batch': r['batch_no'],
-        })
-    for r in s_qs.values(
-        'sale_date', 'product_name', 'product_category', 'quantity',
-        'line_total', 'location_name', 'invoice_no', 'batch_no',
-    ):
-        rows.append({
-            'date': r['sale_date'].isoformat() if r['sale_date'] else '',
-            'type': 'Sale',
-            'product': r['product_name'],
-            'category': r['product_category'],
-            'qty': -int(r['quantity'] or 0),
-            'value': float(r['line_total'] or 0),
-            'location': r['location_name'],
-            'reference': r['invoice_no'],
-            'batch': r['batch_no'],
-        })
-    for r in sr_qs.values(
-        'return_date', 'product_name', 'product_category', 'quantity',
-        'line_total', 'location_name', 'return_no', 'batch_no',
-    ):
-        rows.append({
-            'date': r['return_date'].isoformat() if r['return_date'] else '',
-            'type': 'Sales Return',
-            'product': r['product_name'],
-            'category': r['product_category'],
-            'qty': int(r['quantity'] or 0),
-            'value': float(r['line_total'] or 0),
-            'location': r['location_name'],
-            'reference': r['return_no'],
-            'batch': r['batch_no'],
-        })
+    # Merge the three sources with a DB-side UNION ALL so sorting and
+    # pagination happen in SQL. The previous implementation materialised
+    # every matching row from all three tables into Python, sorted the
+    # combined list, then returned a single page of 50 — O(total rows)
+    # memory and time per request.
+    from django.db.models import CharField, ExpressionWrapper, IntegerField, Value
 
-    rows.sort(key=lambda x: x['date'], reverse=True)
+    _cols = (
+        'event_date', 'event_type', 'product_name', 'product_category',
+        'signed_qty', 'line_total', 'location_name', 'reference', 'batch_no',
+    )
+    p_rows = p_qs.annotate(
+        event_date=F('bill_date'),
+        event_type=Value('Purchase', output_field=CharField()),
+        signed_qty=ExpressionWrapper(F('quantity'), output_field=IntegerField()),
+        reference=F('bill_no'),
+    ).values(*_cols)
+    s_rows = s_qs.annotate(
+        event_date=F('sale_date'),
+        event_type=Value('Sale', output_field=CharField()),
+        signed_qty=ExpressionWrapper(F('quantity') * -1, output_field=IntegerField()),
+        reference=F('invoice_no'),
+    ).values(*_cols)
+    sr_rows = sr_qs.annotate(
+        event_date=F('return_date'),
+        event_type=Value('Sales Return', output_field=CharField()),
+        signed_qty=ExpressionWrapper(F('quantity'), output_field=IntegerField()),
+        reference=F('return_no'),
+    ).values(*_cols)
+
+    union_qs = p_rows.union(s_rows, sr_rows, all=True).order_by(
+        '-event_date', 'event_type', 'reference',
+    )
 
     paginator = PageNumberPagination()
-    page = paginator.paginate_queryset(rows, request)
-    return paginator.get_paginated_response(list(page) if page is not None else [])
+    page = paginator.paginate_queryset(union_qs, request)
+    rows = [
+        {
+            'date': r['event_date'].isoformat() if r['event_date'] else '',
+            'type': r['event_type'],
+            'product': r['product_name'],
+            'category': r['product_category'],
+            'qty': int(r['signed_qty'] or 0),
+            'value': float(r['line_total'] or 0),
+            'location': r['location_name'],
+            'reference': r['reference'],
+            'batch': r['batch_no'],
+        }
+        for r in (page or [])
+    ]
+    return paginator.get_paginated_response(rows)
 
 
 @api_view(['GET'])
