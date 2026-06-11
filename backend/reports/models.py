@@ -31,7 +31,7 @@ class ReportSales(models.Model):
 
     # Channel & payment
     channel = models.CharField(max_length=10, db_index=True)  # POS / B2B
-    payment_method = models.CharField(max_length=50, blank=True)
+    payment_method = models.CharField(max_length=50, blank=True, db_index=True)
 
     # Customer dimension
     customer_id = models.IntegerField(null=True, blank=True, db_index=True)
@@ -94,6 +94,8 @@ class ReportSales(models.Model):
         indexes = [
             models.Index(fields=['sale_month', 'location_id']),
             models.Index(fields=['source_type', 'source_id']),
+            # Hot path: every dashboard query filters by date range + location
+            models.Index(fields=['sale_date', 'location_id']),
         ]
 
 
@@ -129,7 +131,7 @@ class ReportSalesReturns(models.Model):
     # Product
     product_id = models.IntegerField(db_index=True)
     product_name = models.CharField(max_length=255, blank=True)
-    product_category = models.CharField(max_length=100, blank=True)
+    product_category = models.CharField(max_length=100, blank=True, db_index=True)
     product_company = models.CharField(max_length=255, blank=True)
     product_hsn_code = models.CharField(max_length=50, blank=True)
 
@@ -149,6 +151,10 @@ class ReportSalesReturns(models.Model):
 
     class Meta:
         db_table = 'report_sales_returns'
+        indexes = [
+            # Hot path: returns queries filter by date range + location
+            models.Index(fields=['return_date', 'location_id']),
+        ]
 
 
 class ReportPurchases(models.Model):
@@ -190,7 +196,7 @@ class ReportPurchases(models.Model):
     product_id = models.IntegerField(null=True, blank=True, db_index=True)
     product_name = models.CharField(max_length=255, blank=True)
     product_code = models.CharField(max_length=100, blank=True)
-    product_category = models.CharField(max_length=100, blank=True)
+    product_category = models.CharField(max_length=100, blank=True, db_index=True)
     product_subcategory = models.CharField(max_length=100, blank=True)
     product_company = models.CharField(max_length=255, blank=True)
     product_hsn_code = models.CharField(max_length=50, blank=True)
@@ -222,6 +228,8 @@ class ReportPurchases(models.Model):
         db_table = 'report_purchases'
         indexes = [
             models.Index(fields=['purchase_month', 'location_id']),
+            # Hot path: purchase queries filter by bill date range + location
+            models.Index(fields=['bill_date', 'location_id']),
         ]
 
 
@@ -344,6 +352,8 @@ class ReportFinancial(models.Model):
         indexes = [
             models.Index(fields=['entry_month', 'account_type']),
             models.Index(fields=['party_type', 'party_id']),
+            # Hot path: apply_financial_filters always filters date + location
+            models.Index(fields=['entry_date', 'location_id']),
         ]
 
 
