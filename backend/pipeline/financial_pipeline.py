@@ -8,7 +8,7 @@ import traceback
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import connection
-from django.db.models import Sum
+from django.db.models import Min, Sum
 
 from source_models.models import (
     JournalEntryRO, JournalEntryLineRO, ChartOfAccountRO,
@@ -21,7 +21,7 @@ from reports.models import ReportFinancial, ReportGST, ReportTDS
 from pipeline.models import PipelineLog, PipelineError
 from pipeline.inventory_pipeline import (
     get_fiscal_year, _unresolved_ids, _retry_q, _finalize_log,
-    _sweep_vanished_retries,
+    _sweep_vanished_retries, _iter_with_lines, _full_refresh_ctx,
 )
 
 logger = logging.getLogger('pipeline')
@@ -125,6 +125,7 @@ class FinancialPipeline:
     def sync_journal_entries(self, since_id=0):
         """Sync posted journal entries into report_financial."""
         retry_ids = _unresolved_ids('journal_entries')
+        retry_set = set(retry_ids)
         if retry_ids:
             ReportFinancial.objects.filter(source_entry_id__in=retry_ids).delete()
 
@@ -145,10 +146,10 @@ class FinancialPipeline:
         last_id = since_id
         batch = []
 
-        for entry in entries.iterator():
+        for entry, lines in _iter_with_lines(
+                entries, JournalEntryLineRO, 'entry_id', line_select_related=None):
             try:
                 mark = len(batch)
-                lines = JournalEntryLineRO.objects.filter(entry_id=entry.id)
                 entry_month = entry.date.strftime('%Y-%m')
                 fy = get_fiscal_year(entry.date)
                 loc_name = self._get_location_name(entry.location_id)
@@ -198,7 +199,8 @@ class FinancialPipeline:
                     ))
                     count += 1
 
-                _resolve_error('journal_entries', entry.id)
+                if entry.id in retry_set:
+                    _resolve_error('journal_entries', entry.id)
                 last_id = max(last_id, entry.id)
 
                 if len(batch) >= BATCH_SIZE:
@@ -246,6 +248,7 @@ class FinancialPipeline:
 
     def _sync_gstr1(self, since_id=0):
         retry_ids = self._gst_retry_ids('gstr1')
+        retry_set = set(retry_ids)
         entries = (
             GSTR1EntryRO.objects
             .filter(_retry_q(since_id, retry_ids), is_active=True)
@@ -303,7 +306,8 @@ class FinancialPipeline:
                 ))
                 count += 1
                 last_id = max(last_id, e.id)
-                _resolve_error('gstr1', e.id)
+                if e.id in retry_set:
+                    _resolve_error('gstr1', e.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportGST.objects.bulk_create(batch)
@@ -327,6 +331,7 @@ class FinancialPipeline:
 
     def _sync_gstr3b(self, since_id=0):
         retry_ids = self._gst_retry_ids('gstr3b')
+        retry_set = set(retry_ids)
         entries = GSTR3BSummaryRO.objects.filter(
             _retry_q(since_id, retry_ids)).order_by('id')
 
@@ -366,7 +371,8 @@ class FinancialPipeline:
                 ))
                 count += 1
                 last_id = max(last_id, e.id)
-                _resolve_error('gstr3b', e.id)
+                if e.id in retry_set:
+                    _resolve_error('gstr3b', e.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportGST.objects.bulk_create(batch)
@@ -390,6 +396,7 @@ class FinancialPipeline:
 
     def _sync_gstr2b(self, since_id=0):
         retry_ids = self._gst_retry_ids('gstr2b')
+        retry_set = set(retry_ids)
         entries = GSTR2BEntryRO.objects.filter(
             _retry_q(since_id, retry_ids)).order_by('id')
 
@@ -425,7 +432,8 @@ class FinancialPipeline:
                 ))
                 count += 1
                 last_id = max(last_id, e.id)
-                _resolve_error('gstr2b', e.id)
+                if e.id in retry_set:
+                    _resolve_error('gstr2b', e.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportGST.objects.bulk_create(batch)
@@ -449,6 +457,7 @@ class FinancialPipeline:
 
     def _sync_itc(self, since_id=0):
         retry_ids = self._gst_retry_ids('itc')
+        retry_set = set(retry_ids)
         entries = ITCReconciliationRO.objects.filter(
             _retry_q(since_id, retry_ids)).order_by('id')
 
@@ -484,7 +493,8 @@ class FinancialPipeline:
                 ))
                 count += 1
                 last_id = max(last_id, e.id)
-                _resolve_error('itc', e.id)
+                if e.id in retry_set:
+                    _resolve_error('itc', e.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportGST.objects.bulk_create(batch)
@@ -508,6 +518,7 @@ class FinancialPipeline:
 
     def _sync_rcm(self, since_id=0):
         retry_ids = self._gst_retry_ids('rcm')
+        retry_set = set(retry_ids)
         entries = RCMEntryRO.objects.filter(
             _retry_q(since_id, retry_ids)).order_by('id')
 
@@ -541,7 +552,8 @@ class FinancialPipeline:
                 ))
                 count += 1
                 last_id = max(last_id, e.id)
-                _resolve_error('rcm', e.id)
+                if e.id in retry_set:
+                    _resolve_error('rcm', e.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportGST.objects.bulk_create(batch)
@@ -566,6 +578,7 @@ class FinancialPipeline:
     def sync_tds_entries(self, since_id=0):
         """Sync TDS deductions into report_tds, joining challan data."""
         retry_ids = _unresolved_ids('tds')
+        retry_set = set(retry_ids)
         if retry_ids:
             ReportTDS.objects.filter(source_id__in=retry_ids).delete()
 
@@ -577,6 +590,10 @@ class FinancialPipeline:
         last_error = ''
         last_id = since_id
         batch = []
+        # challan_no → (total_tds_amount, deposit_date), loaded once on the
+        # first deduction instead of one .first() query per deduction.
+        # Mirrors .first() semantics (lowest id wins for duplicate nos).
+        challan_map = None
 
         for d in deductions.iterator():
             try:
@@ -589,10 +606,20 @@ class FinancialPipeline:
                 challan_total = Decimal('0')
                 challan_deposit = None
                 if d.challan_no:
-                    challan = TDSChallanRO.objects.filter(challan_no=d.challan_no).first()
+                    if challan_map is None:
+                        challan_map = {}
+                        for c in (
+                            TDSChallanRO.objects
+                            .order_by('id')
+                            .values('challan_no', 'total_tds_amount', 'deposit_date')
+                        ):
+                            challan_map.setdefault(
+                                c['challan_no'],
+                                (Decimal(str(c['total_tds_amount'] or 0)), c['deposit_date']),
+                            )
+                    challan = challan_map.get(d.challan_no)
                     if challan:
-                        challan_total = Decimal(str(challan.total_tds_amount or 0))
-                        challan_deposit = challan.deposit_date
+                        challan_total, challan_deposit = challan
 
                 batch.append(ReportTDS(
                     source_id=d.id,
@@ -620,7 +647,8 @@ class FinancialPipeline:
                 ))
                 count += 1
                 last_id = max(last_id, d.id)
-                _resolve_error('tds', d.id)
+                if d.id in retry_set:
+                    _resolve_error('tds', d.id)
 
                 if len(batch) >= BATCH_SIZE:
                     ReportTDS.objects.bulk_create(batch)
@@ -662,11 +690,21 @@ class FinancialPipeline:
         today = _date.today()
 
         # Aggregate purchase line totals by source_id (one TDS per bill).
+        # The bill-header dimensions (date / supplier / location) are
+        # denormalised identically onto every line of a bill, so Min()
+        # inside the same grouped query returns the header value — no
+        # per-bill .first() lookup needed.
         big_bills = (
             ReportPurchases.objects
             .filter(is_return=False)
             .values('source_id')
-            .annotate(bill_total_agg=Sum('line_total'))
+            .annotate(
+                bill_total_agg=Sum('line_total'),
+                bill_date_agg=Min('bill_date'),
+                supplier_name_agg=Min('supplier_name'),
+                location_id_agg=Min('location_id'),
+                location_name_agg=Min('location_name'),
+            )
         )
 
         batch = []
@@ -678,16 +716,13 @@ class FinancialPipeline:
             if taxable < TDS_THRESHOLD:
                 continue
             tds_amount = (taxable * TDS_RATE / Decimal('100')).quantize(Decimal('0.01'), ROUND_HALF_UP)
-            row = ReportPurchases.objects.filter(source_id=bill_id).first()
-            if not row:
-                continue
-            txn_date = row.bill_date or today
+            txn_date = b['bill_date_agg'] or today
             txn_month = txn_date.strftime('%Y-%m')
             fy = get_fiscal_year_from_period(txn_month) if txn_month else ''
             is_recent = (today - txn_date).days < 30 if isinstance(txn_date, _date) else False
             batch.append(ReportTDS(
                 source_id=bill_id,
-                deductee_name=getattr(row, 'supplier_name', '') or '',
+                deductee_name=b['supplier_name_agg'] or '',
                 deductee_pan='',
                 section='194Q',
                 deductee_type='Resident',
@@ -703,8 +738,8 @@ class FinancialPipeline:
                 status='pending' if is_recent else 'deducted',
                 challan_no='',
                 challan_total_amount=Decimal('0'),
-                location_id=getattr(row, 'location_id', None),
-                location_name=getattr(row, 'location_name', '') or '',
+                location_id=b['location_id_agg'],
+                location_name=b['location_name_agg'] or '',
             ))
         if batch:
             ReportTDS.objects.bulk_create(batch, batch_size=500)
@@ -727,15 +762,24 @@ class FinancialPipeline:
         ])
 
         if full:
+            # Each report table's delete + rebuild shares one transaction on
+            # PostgreSQL (no empty-dashboard window mid-refresh); on SQLite
+            # _full_refresh_ctx is a no-op to keep the shared dev DB's write
+            # lock short.
             logger.info("Full financial pipeline refresh – clearing existing data")
-            ReportFinancial.objects.all().delete()
-            ReportGST.objects.all().delete()
-            ReportTDS.objects.all().delete()
-            je_since = tds_since = 0
-            gst_since = {}
+            results = {}
+            with _full_refresh_ctx():
+                ReportFinancial.objects.all().delete()
+                results['journal_entries'] = self.sync_journal_entries(0)
+            with _full_refresh_ctx():
+                ReportGST.objects.all().delete()
+                results['gst_entries'] = self.sync_gst_entries({})
+            with _full_refresh_ctx():
+                ReportTDS.objects.all().delete()
+                results['tds_entries'] = (
+                    self.sync_tds_entries(0) + self.synthesise_tds_from_purchases()
+                )
         else:
-            je_since = PipelineLog.get_last_id('journal_entries')
-            tds_since = PipelineLog.get_last_id('tds')
             gst_since = {
                 'gstr1': PipelineLog.get_last_id('gstr1'),
                 'gstr3b': PipelineLog.get_last_id('gstr3b'),
@@ -743,12 +787,13 @@ class FinancialPipeline:
                 'itc': PipelineLog.get_last_id('itc'),
                 'rcm': PipelineLog.get_last_id('rcm'),
             }
-
-        results = {
-            'journal_entries': self.sync_journal_entries(je_since),
-            'gst_entries': self.sync_gst_entries(gst_since),
-            'tds_entries': self.sync_tds_entries(tds_since) + self.synthesise_tds_from_purchases(),
-        }
+            results = {
+                'journal_entries': self.sync_journal_entries(
+                    PipelineLog.get_last_id('journal_entries')),
+                'gst_entries': self.sync_gst_entries(gst_since),
+                'tds_entries': self.sync_tds_entries(PipelineLog.get_last_id('tds'))
+                + self.synthesise_tds_from_purchases(),
+            }
 
         duration = time.time() - start
         total = sum(results.values())

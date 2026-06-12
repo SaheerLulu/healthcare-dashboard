@@ -5,10 +5,12 @@ Handles: POS sales, B2B sales, sales returns, purchases, purchase returns, inven
 import logging
 import time
 import traceback
+from contextlib import nullcontext
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+from itertools import islice
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Sum, Max, Min, F, Q
 from django.utils import timezone
 
@@ -28,6 +30,8 @@ from pipeline.models import PipelineLog, PipelineError
 logger = logging.getLogger('pipeline')
 
 BATCH_SIZE = 500
+# Parents per upstream line-prefetch chunk (see _iter_with_lines).
+LINE_CHUNK = 500
 
 
 def get_fiscal_year(d):
@@ -245,6 +249,47 @@ def _sweep_vanished_retries(specs):
             ).update(resolved=True)
 
 
+def _iter_with_lines(parent_qs, line_model, fk_attname, line_select_related=('product',)):
+    """Yield ``(parent, [lines])`` pairs in the queryset's iteration order.
+
+    Replaces the per-parent line SELECT (an N+1 — one query per order on
+    every run) with one ``filter(<fk>__in=chunk)`` query per LINE_CHUNK
+    parents. The parent stream order — and therefore the per-record
+    watermark semantics of the callers — is unchanged; only the line
+    fetch is batched.
+    """
+    parents = parent_qs.iterator()
+    while True:
+        chunk = list(islice(parents, LINE_CHUNK))
+        if not chunk:
+            return
+        line_qs = line_model.objects.filter(
+            **{f'{fk_attname}__in': [p.id for p in chunk]}
+        )
+        if line_select_related:
+            line_qs = line_qs.select_related(*line_select_related)
+        lines_by_parent = {}
+        for line in line_qs:
+            lines_by_parent.setdefault(getattr(line, fk_attname), []).append(line)
+        for parent in chunk:
+            yield parent, lines_by_parent.get(parent.id, [])
+
+
+def _full_refresh_ctx():
+    """Transaction context for one report table's full-refresh delete+rebuild.
+
+    PostgreSQL: atomic per table, so dashboards keep serving the previous
+    rows until the rebuild commits instead of seeing an empty table for the
+    duration of the rebuild. SQLite: deliberately a no-op — the shared dev
+    SQLite also serves the live pharmacy app, and holding the single write
+    lock for a whole-table rebuild would starve it; the brief-empty-window
+    behaviour is the lesser evil there.
+    """
+    if connection.vendor == 'postgresql':
+        return transaction.atomic()
+    return nullcontext()
+
+
 def _finalize_log(pipeline_type, last_id, count, errors=0, last_error=''):
     """Write the per-type PipelineLog honestly: 'partial' when any record
     failed during this run, 'success' only when error-free."""
@@ -269,6 +314,7 @@ class InventoryPipeline:
     def sync_pos_sales(self, since_id=0):
         """Sync POS sales orders into report_sales."""
         retry_ids = _unresolved_ids('pos_sales')
+        retry_set = set(retry_ids)
         if retry_ids:
             # Drop any partial rows from the failed attempt to avoid dupes.
             ReportSales.objects.filter(
@@ -288,13 +334,9 @@ class InventoryPipeline:
         last_id = since_id
         batch = []
 
-        for order in orders.iterator():
+        for order, lines in _iter_with_lines(orders, POSOrderLineRO, 'pos_order_id'):
             try:
                 mark = len(batch)
-                lines = POSOrderLineRO.objects.filter(
-                    pos_order_id=order.id
-                ).select_related('product')
-
                 sale_dt = order.sale_date
                 # local_date/local_hour convert aware UTC datetimes to IST
                 # before deriving calendar fields — .date()/.hour on the
@@ -385,7 +427,8 @@ class InventoryPipeline:
                     ))
                     count += 1
 
-                _resolve_error('pos_sales', order.id)
+                if order.id in retry_set:
+                    _resolve_error('pos_sales', order.id)
                 last_id = max(last_id, order.id)
 
                 if len(batch) >= BATCH_SIZE:
@@ -411,6 +454,7 @@ class InventoryPipeline:
     def sync_b2b_sales(self, since_id=0):
         """Sync B2B sales orders into report_sales."""
         retry_ids = _unresolved_ids('b2b_sales')
+        retry_set = set(retry_ids)
         if retry_ids:
             ReportSales.objects.filter(
                 source_type='b2b', source_id__in=retry_ids,
@@ -429,13 +473,9 @@ class InventoryPipeline:
         last_id = since_id
         batch = []
 
-        for order in orders.iterator():
+        for order, lines in _iter_with_lines(orders, B2BSalesOrderLineRO, 'sales_order_id'):
             try:
                 mark = len(batch)
-                lines = B2BSalesOrderLineRO.objects.filter(
-                    sales_order_id=order.id
-                ).select_related('product')
-
                 # B2B sale_date is a plain DateField; the created_at
                 # fallback is an aware datetime → derive the IST date.
                 sale_d = order.sale_date or local_date(order.created_at)
@@ -493,7 +533,8 @@ class InventoryPipeline:
                     ))
                     count += 1
 
-                _resolve_error('b2b_sales', order.id)
+                if order.id in retry_set:
+                    _resolve_error('b2b_sales', order.id)
                 last_id = max(last_id, order.id)
 
                 if len(batch) >= BATCH_SIZE:
@@ -519,6 +560,7 @@ class InventoryPipeline:
     def sync_sales_returns(self, since_id=0):
         """Sync sales returns into report_sales_returns."""
         retry_ids = _unresolved_ids('sales_returns')
+        retry_set = set(retry_ids)
         if retry_ids:
             ReportSalesReturns.objects.filter(source_id__in=retry_ids).delete()
 
@@ -535,13 +577,9 @@ class InventoryPipeline:
         last_id = since_id
         batch = []
 
-        for ret in returns.iterator():
+        for ret, lines in _iter_with_lines(returns, SalesReturnLineRO, 'sales_return_id'):
             try:
                 mark = len(batch)
-                lines = SalesReturnLineRO.objects.filter(
-                    sales_return_id=ret.id
-                ).select_related('product')
-
                 ret_dt = ret.return_date
                 ret_d = local_date(ret_dt)  # IST calendar day, not UTC
                 ret_month = ret_d.strftime('%Y-%m')
@@ -588,7 +626,8 @@ class InventoryPipeline:
                     ))
                     count += 1
 
-                _resolve_error('sales_returns', ret.id)
+                if ret.id in retry_set:
+                    _resolve_error('sales_returns', ret.id)
                 last_id = max(last_id, ret.id)
 
                 if len(batch) >= BATCH_SIZE:
@@ -614,6 +653,7 @@ class InventoryPipeline:
     def sync_purchases(self, since_id=0):
         """Sync purchase orders into report_purchases."""
         retry_ids = _unresolved_ids('purchases')
+        retry_set = set(retry_ids)
         if retry_ids:
             ReportPurchases.objects.filter(
                 is_return=False, source_id__in=retry_ids,
@@ -632,13 +672,9 @@ class InventoryPipeline:
         last_id = since_id
         batch = []
 
-        for order in orders.iterator():
+        for order, lines in _iter_with_lines(orders, PurchaseOrderLineRO, 'purchase_order_id'):
             try:
                 mark = len(batch)
-                lines = PurchaseOrderLineRO.objects.filter(
-                    purchase_order_id=order.id
-                ).select_related('product')
-
                 bill_d = order.bill_date
                 purchase_month = bill_d.strftime('%Y-%m') if bill_d else ''
                 fy = get_fiscal_year(bill_d) if bill_d else ''
@@ -646,7 +682,7 @@ class InventoryPipeline:
                 supplier = order.supplier
 
                 # Calculate transport cost share per line
-                line_count = lines.count()
+                line_count = len(lines)
                 transport_share = (safe_decimal(order.transport_cost) / line_count).quantize(
                     Decimal('0.01'), ROUND_HALF_UP
                 ) if line_count > 0 and order.transport_cost else Decimal('0')
@@ -717,7 +753,8 @@ class InventoryPipeline:
                     ))
                     count += 1
 
-                _resolve_error('purchases', order.id)
+                if order.id in retry_set:
+                    _resolve_error('purchases', order.id)
                 last_id = max(last_id, order.id)
 
                 if len(batch) >= BATCH_SIZE:
@@ -743,6 +780,7 @@ class InventoryPipeline:
     def sync_purchase_returns(self, since_id=0):
         """Sync purchase returns into report_purchases with is_return=True."""
         retry_ids = _unresolved_ids('purchase_returns')
+        retry_set = set(retry_ids)
         if retry_ids:
             ReportPurchases.objects.filter(
                 is_return=True, source_id__in=retry_ids,
@@ -761,13 +799,9 @@ class InventoryPipeline:
         last_id = since_id
         batch = []
 
-        for ret in returns.iterator():
+        for ret, lines in _iter_with_lines(returns, PurchaseReturnLineRO, 'purchase_return_id'):
             try:
                 mark = len(batch)
-                lines = PurchaseReturnLineRO.objects.filter(
-                    purchase_return_id=ret.id
-                ).select_related('product')
-
                 ret_dt = ret.return_date
                 ret_d = local_date(ret_dt)  # IST calendar day, not UTC
                 ret_month = ret_d.strftime('%Y-%m')
@@ -826,7 +860,8 @@ class InventoryPipeline:
                     ))
                     count += 1
 
-                _resolve_error('purchase_returns', ret.id)
+                if ret.id in retry_set:
+                    _resolve_error('purchase_returns', ret.id)
                 last_id = max(last_id, ret.id)
 
                 if len(batch) >= BATCH_SIZE:
@@ -905,6 +940,12 @@ class InventoryPipeline:
             .annotate(total_revenue=Sum('line_total'))
             .order_by('-total_revenue')
         )
+        # 90-day revenue per product, reused for GMROI below. Previously
+        # this was one ReportSales aggregate per stock-quant row — an N+1
+        # that dominated every 15-minute incremental run.
+        revenue_90_map = {
+            r['product_id']: r['total_revenue'] for r in revenue_by_product
+        }
         total_revenue = sum(r['total_revenue'] or 0 for r in revenue_by_product)
         cumulative = Decimal('0')
         for r in revenue_by_product:
@@ -917,134 +958,134 @@ class InventoryPipeline:
             else:
                 abc_map[r['product_id']] = 'C'
 
-        # Delete old snapshot and rebuild
-        ReportInventory.objects.all().delete()
+        # Delete old snapshot and rebuild. Atomic so dashboards never
+        # see a half-empty snapshot table mid-rebuild (the delete and the
+        # bulk inserts commit together). The write phase is short — the
+        # expensive aggregates above run before the transaction opens.
+        with transaction.atomic():
+            ReportInventory.objects.all().delete()
 
-        quants = StockQuantRO.objects.select_related('product', 'location').all()
-        batch = []
-        count = 0
+            quants = StockQuantRO.objects.select_related('product', 'location').all()
+            batch = []
+            count = 0
 
-        for q in quants.iterator():
-            product = q.product
-            if not product:
-                continue
+            for q in quants.iterator():
+                product = q.product
+                if not product:
+                    continue
 
-            prod = _product_fields(product)
-            loc_name = q.location.name if q.location else ''
-            key = (product.id, q.location_id)
+                prod = _product_fields(product)
+                loc_name = q.location.name if q.location else ''
+                key = (product.id, q.location_id)
 
-            qty = q.quantity or 0
-            reserved = q.reserved_quantity or 0
-            available = qty - reserved
-            p_rate = safe_decimal(q.purchase_rate)
-            mrp = safe_decimal(q.mrp)
+                qty = q.quantity or 0
+                reserved = q.reserved_quantity or 0
+                available = qty - reserved
+                p_rate = safe_decimal(q.purchase_rate)
+                mrp = safe_decimal(q.mrp)
 
-            # Expiry calculation
-            days_to_exp = 9999
-            exp_status = 'ok'
-            if q.expiry_month:
-                try:
-                    parts = q.expiry_month.split('-')
-                    exp_year, exp_month = int(parts[0]), int(parts[1])
-                    # First day of expiry month
-                    from calendar import monthrange
-                    last_day = monthrange(exp_year, exp_month)[1]
-                    exp_date = date(exp_year, exp_month, last_day)
-                    days_to_exp = (exp_date - today).days
-                    if days_to_exp < 0:
-                        exp_status = 'expired'
-                    elif days_to_exp <= 30:
-                        exp_status = 'critical_30'
-                    elif days_to_exp <= 90:
-                        exp_status = 'warning_90'
-                except (ValueError, IndexError):
-                    pass
+                # Expiry calculation
+                days_to_exp = 9999
+                exp_status = 'ok'
+                if q.expiry_month:
+                    try:
+                        parts = q.expiry_month.split('-')
+                        exp_year, exp_month = int(parts[0]), int(parts[1])
+                        # First day of expiry month
+                        from calendar import monthrange
+                        last_day = monthrange(exp_year, exp_month)[1]
+                        exp_date = date(exp_year, exp_month, last_day)
+                        days_to_exp = (exp_date - today).days
+                        if days_to_exp < 0:
+                            exp_status = 'expired'
+                        elif days_to_exp <= 30:
+                            exp_status = 'critical_30'
+                        elif days_to_exp <= 90:
+                            exp_status = 'warning_90'
+                    except (ValueError, IndexError):
+                        pass
 
-            # Movement analytics
-            sold_90 = sales_90d_map.get(key, 0)
-            sold_30 = sales_30d_map.get(key, 0)
-            avg_demand = Decimal(str(sold_90)) / 90 if sold_90 else Decimal('0')
-            dos = int(qty / avg_demand) if avg_demand > 0 else 9999
-            dos = min(dos, 9999)
+                # Movement analytics
+                sold_90 = sales_90d_map.get(key, 0)
+                sold_30 = sales_30d_map.get(key, 0)
+                avg_demand = Decimal(str(sold_90)) / 90 if sold_90 else Decimal('0')
+                dos = int(qty / avg_demand) if avg_demand > 0 else 9999
+                dos = min(dos, 9999)
 
-            last_sale = last_sale_map.get(key)
-            days_since_sale = (today - last_sale).days if last_sale else 9999
-            last_purch = last_purchase_map.get(key)
+                last_sale = last_sale_map.get(key)
+                days_since_sale = (today - last_sale).days if last_sale else 9999
+                last_purch = last_purchase_map.get(key)
 
-            # Movement status
-            if days_since_sale <= 30:
-                mov_status = 'fast'
-            elif days_since_sale <= 60:
-                mov_status = 'medium'
-            elif days_since_sale <= 90:
-                mov_status = 'slow'
-            else:
-                mov_status = 'dead'
+                # Movement status
+                if days_since_sale <= 30:
+                    mov_status = 'fast'
+                elif days_since_sale <= 60:
+                    mov_status = 'medium'
+                elif days_since_sale <= 90:
+                    mov_status = 'slow'
+                else:
+                    mov_status = 'dead'
 
-            abc = abc_map.get(product.id, 'C')
-            min_stock = safe_decimal(product.pharma_min_stock)
-            reorder = qty < float(min_stock) if min_stock else False
-            safety = (avg_demand * 7).quantize(Decimal('0.01'), ROUND_HALF_UP)
+                abc = abc_map.get(product.id, 'C')
+                min_stock = safe_decimal(product.pharma_min_stock)
+                reorder = qty < float(min_stock) if min_stock else False
+                safety = (avg_demand * 7).quantize(Decimal('0.01'), ROUND_HALF_UP)
 
-            # GMROI and turnover (simplified)
-            cost_of_sold = p_rate * sold_90 if p_rate else Decimal('0')
-            avg_inv_cost = p_rate * qty if p_rate else Decimal('0')
-            revenue_90 = Decimal(str(
-                ReportSales.objects
-                .filter(product_id=product.id, sale_date__gte=ninety_days_ago)
-                .aggregate(s=Sum('line_total'))['s'] or 0
-            ))
-            gross_margin_90 = revenue_90 - cost_of_sold
-            gmroi = (gross_margin_90 / avg_inv_cost).quantize(Decimal('0.01'), ROUND_HALF_UP) if avg_inv_cost else Decimal('0')
-            turnover = (cost_of_sold * 4 / avg_inv_cost).quantize(Decimal('0.01'), ROUND_HALF_UP) if avg_inv_cost else Decimal('0')  # annualized
+                # GMROI and turnover (simplified)
+                cost_of_sold = p_rate * sold_90 if p_rate else Decimal('0')
+                avg_inv_cost = p_rate * qty if p_rate else Decimal('0')
+                revenue_90 = Decimal(str(revenue_90_map.get(product.id) or 0))
+                gross_margin_90 = revenue_90 - cost_of_sold
+                gmroi = (gross_margin_90 / avg_inv_cost).quantize(Decimal('0.01'), ROUND_HALF_UP) if avg_inv_cost else Decimal('0')
+                turnover = (cost_of_sold * 4 / avg_inv_cost).quantize(Decimal('0.01'), ROUND_HALF_UP) if avg_inv_cost else Decimal('0')  # annualized
 
-            batch.append(ReportInventory(
-                snapshot_date=today,
-                **prod,
-                product_is_critical=product.pharma_is_critical,
-                product_requires_cold_chain=product.pharma_requires_cold_chain,
-                product_min_stock=min_stock,
-                location_id=q.location_id or 0,
-                location_name=loc_name,
-                batch_no=q.lot_name or '',
-                expiry_month=q.expiry_month or '',
-                days_to_expiry=days_to_exp,
-                expiry_status=exp_status,
-                qty_on_hand=qty,
-                reserved_qty=reserved,
-                available_qty=available,
-                purchase_rate=p_rate,
-                mrp=mrp,
-                stock_value_cost=(p_rate * qty).quantize(Decimal('0.01'), ROUND_HALF_UP),
-                stock_value_mrp=(mrp * qty).quantize(Decimal('0.01'), ROUND_HALF_UP),
-                total_sold_qty_90d=sold_90,
-                total_sold_qty_30d=sold_30,
-                avg_daily_demand=avg_demand.quantize(Decimal('0.01'), ROUND_HALF_UP),
-                days_of_stock=dos,
-                last_sale_date=last_sale,
-                days_since_last_sale=days_since_sale,
-                last_purchase_date=last_purch,
-                movement_status=mov_status,
-                abc_class=abc,
-                reorder_needed=reorder,
-                safety_stock=safety,
-                fill_rate=Decimal('95.00'),  # Placeholder, needs stockout history
-                inventory_turnover=turnover,
-                gmroi=gmroi,
-            ))
-            count += 1
+                batch.append(ReportInventory(
+                    snapshot_date=today,
+                    **prod,
+                    product_is_critical=product.pharma_is_critical,
+                    product_requires_cold_chain=product.pharma_requires_cold_chain,
+                    product_min_stock=min_stock,
+                    location_id=q.location_id or 0,
+                    location_name=loc_name,
+                    batch_no=q.lot_name or '',
+                    expiry_month=q.expiry_month or '',
+                    days_to_expiry=days_to_exp,
+                    expiry_status=exp_status,
+                    qty_on_hand=qty,
+                    reserved_qty=reserved,
+                    available_qty=available,
+                    purchase_rate=p_rate,
+                    mrp=mrp,
+                    stock_value_cost=(p_rate * qty).quantize(Decimal('0.01'), ROUND_HALF_UP),
+                    stock_value_mrp=(mrp * qty).quantize(Decimal('0.01'), ROUND_HALF_UP),
+                    total_sold_qty_90d=sold_90,
+                    total_sold_qty_30d=sold_30,
+                    avg_daily_demand=avg_demand.quantize(Decimal('0.01'), ROUND_HALF_UP),
+                    days_of_stock=dos,
+                    last_sale_date=last_sale,
+                    days_since_last_sale=days_since_sale,
+                    last_purchase_date=last_purch,
+                    movement_status=mov_status,
+                    abc_class=abc,
+                    reorder_needed=reorder,
+                    safety_stock=safety,
+                    fill_rate=Decimal('95.00'),  # Placeholder, needs stockout history
+                    inventory_turnover=turnover,
+                    gmroi=gmroi,
+                ))
+                count += 1
 
-            if len(batch) >= BATCH_SIZE:
+                if len(batch) >= BATCH_SIZE:
+                    ReportInventory.objects.bulk_create(batch)
+                    batch = []
+
+            if batch:
                 ReportInventory.objects.bulk_create(batch)
-                batch = []
 
-        if batch:
-            ReportInventory.objects.bulk_create(batch)
-
-        PipelineLog.objects.update_or_create(
-            pipeline_type='inventory_snapshot',
-            defaults={'last_synced_id': 0, 'records_processed': count, 'status': 'success'},
-        )
+            PipelineLog.objects.update_or_create(
+                pipeline_type='inventory_snapshot',
+                defaults={'last_synced_id': 0, 'records_processed': count, 'status': 'success'},
+            )
         logger.info("Inventory snapshot refreshed: %d records", count)
         return count
 
@@ -1062,27 +1103,34 @@ class InventoryPipeline:
         ])
 
         if full:
+            # Each report table's delete + rebuild shares one transaction on
+            # PostgreSQL (no empty-dashboard window mid-refresh); on SQLite
+            # _full_refresh_ctx is a no-op to keep the shared dev DB's write
+            # lock short. ReportInventory needs no delete here —
+            # refresh_inventory_snapshot rebuilds it atomically itself.
             logger.info("Full inventory pipeline refresh – clearing existing data")
-            ReportSales.objects.all().delete()
-            ReportSalesReturns.objects.all().delete()
-            ReportPurchases.objects.all().delete()
-            ReportInventory.objects.all().delete()
-            pos_since = b2b_since = ret_since = pur_since = pret_since = 0
+            results = {}
+            with _full_refresh_ctx():
+                ReportSales.objects.all().delete()
+                results['pos_sales'] = self.sync_pos_sales(0)
+                results['b2b_sales'] = self.sync_b2b_sales(0)
+            with _full_refresh_ctx():
+                ReportSalesReturns.objects.all().delete()
+                results['sales_returns'] = self.sync_sales_returns(0)
+            with _full_refresh_ctx():
+                ReportPurchases.objects.all().delete()
+                results['purchases'] = self.sync_purchases(0)
+                results['purchase_returns'] = self.sync_purchase_returns(0)
+            results['inventory_snapshot'] = self.refresh_inventory_snapshot()
         else:
-            pos_since = PipelineLog.get_last_id('pos_sales')
-            b2b_since = PipelineLog.get_last_id('b2b_sales')
-            ret_since = PipelineLog.get_last_id('sales_returns')
-            pur_since = PipelineLog.get_last_id('purchases')
-            pret_since = PipelineLog.get_last_id('purchase_returns')
-
-        results = {
-            'pos_sales': self.sync_pos_sales(pos_since),
-            'b2b_sales': self.sync_b2b_sales(b2b_since),
-            'sales_returns': self.sync_sales_returns(ret_since),
-            'purchases': self.sync_purchases(pur_since),
-            'purchase_returns': self.sync_purchase_returns(pret_since),
-            'inventory_snapshot': self.refresh_inventory_snapshot(),
-        }
+            results = {
+                'pos_sales': self.sync_pos_sales(PipelineLog.get_last_id('pos_sales')),
+                'b2b_sales': self.sync_b2b_sales(PipelineLog.get_last_id('b2b_sales')),
+                'sales_returns': self.sync_sales_returns(PipelineLog.get_last_id('sales_returns')),
+                'purchases': self.sync_purchases(PipelineLog.get_last_id('purchases')),
+                'purchase_returns': self.sync_purchase_returns(PipelineLog.get_last_id('purchase_returns')),
+                'inventory_snapshot': self.refresh_inventory_snapshot(),
+            }
 
         duration = time.time() - start
         total = sum(results.values())
