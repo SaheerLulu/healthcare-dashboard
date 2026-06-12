@@ -175,7 +175,14 @@ def rfm(request):
     Buckets are computed via quintile rank to keep them robust to
     outliers; for thin data (< 5 customers per bucket) the rank still
     works because Python sort is stable.
+
+    Perf note: ranks come from one sort per metric over light (id, value)
+    tuples, and only the returned top-`limit` rows are materialised into
+    response dicts — heapq.nlargest is documented as equivalent to
+    sorted(..., reverse=True)[:n] (stable), so the returned rows are
+    identical to the previous full enrich-everything-then-sort approach.
     """
+    import heapq
     from datetime import date as _date
     f = parse_filters(request)
     end = _date.fromisoformat(f['end_date'])
@@ -223,9 +230,7 @@ def rfm(request):
     f_map = quintile_rank([(c['customer_id'], c['orders']) for c in customers])
     m_map = quintile_rank([(c['customer_id'], c['revenue']) for c in customers])
 
-    segments_count: dict = {}
-    enriched = []
-    for c in customers:
+    def scores(c):
         r = r_map.get(c['customer_id'], 1)
         fr = f_map.get(c['customer_id'], 1)
         mn = m_map.get(c['customer_id'], 1)
@@ -242,8 +247,20 @@ def rfm(request):
             seg = 'Lost'
         else:
             seg = 'Hibernating'
+        return r, fr, mn, seg
+
+    # Headline segment counts: one light pass, no per-customer dict copies.
+    segments_count: dict = {}
+    for c in customers:
+        seg = scores(c)[3]
         segments_count[seg] = segments_count.get(seg, 0) + 1
-        enriched.append({
+
+    limit = parse_limit(request.query_params.get('limit'), 200)
+    top = heapq.nlargest(limit, customers, key=lambda c: c['revenue'])
+    out_rows = []
+    for c in top:
+        r, fr, mn, seg = scores(c)
+        out_rows.append({
             **c,
             'last_sale': c['last_sale'].isoformat() if c['last_sale'] else None,
             'r': r,
@@ -253,20 +270,18 @@ def rfm(request):
             'segment': seg,
         })
 
-    enriched.sort(key=lambda x: x['revenue'], reverse=True)
-
     # Headline totals so the frontend tile can render counts per segment.
     seg_order = ['Champions', 'Loyal', 'Potential', 'At-Risk', 'Lost', 'Hibernating']
     return Response({
         'totals': {
-            'count': len(enriched),
+            'count': len(customers),
             'period': {'start': f['start_date'], 'end': f['end_date']},
         },
         'segments': [
             {'segment': s, 'count': segments_count.get(s, 0)}
             for s in seg_order
         ],
-        'customers': enriched[:parse_limit(request.query_params.get('limit'), 200)],
+        'customers': out_rows,
     })
 
 

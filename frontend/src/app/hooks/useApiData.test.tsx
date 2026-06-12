@@ -161,6 +161,41 @@ describe('useApiData', () => {
     expect(after).toBeGreaterThan(before);
   });
 
+  it('dedupes concurrent noFilters mounts of the same endpoint into one request', async () => {
+    // TopBar + FilterSidebar + GlobalDateBar each consume
+    // /executive/filter-options/ on mount — they must share one wire call.
+    const { result } = renderHook(
+      () => ({
+        a: useApiData('/executive/filter-options/', {} as any, { noFilters: true }),
+        b: useApiData('/executive/filter-options/', {} as any, { noFilters: true }),
+        c: useApiData('/executive/filter-options/', {} as any, { noFilters: true }),
+      }),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current.a.loading).toBe(false);
+      expect(result.current.b.loading).toBe(false);
+      expect(result.current.c.loading).toBe(false);
+    });
+    expect(callsTo('/executive/filter-options/').length).toBe(1);
+    expect(result.current.a.data).toEqual({ ok: true });
+    expect(result.current.b.data).toEqual({ ok: true });
+    expect(result.current.c.data).toEqual({ ok: true });
+  });
+
+  it('refetch() after settle issues a fresh request even for noFilters consumers', async () => {
+    const { result } = renderHook(
+      () => useApiData('/executive/filter-options/', {} as any, { noFilters: true }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const before = callsTo('/executive/filter-options/').length;
+    await act(async () => {
+      await result.current.refetch();
+    });
+    expect(callsTo('/executive/filter-options/').length).toBe(before + 1);
+  });
+
   it('passes location_ids comma-joined when present', async () => {
     const { result } = renderHook(
       () => {
@@ -253,6 +288,30 @@ describe('useApiData debounce & cancellation (fake timers)', () => {
     expect(calls.length).toBe(2);
     // The trailing fetch carries the latest filter state.
     expect(calls[1][1].params.location_ids).toBe('1');
+  });
+
+  it('does NOT refetch noFilters endpoints when filters change', async () => {
+    const { result } = renderHook(
+      () => {
+        const filters = useFilters();
+        const data = useApiData('/pipeline/history/', [] as any, { noFilters: true });
+        return { ...data, ...filters };
+      },
+      { wrapper },
+    );
+    await flush();
+    expect(callsTo('/pipeline/history/').length).toBe(1);
+
+    act(() => {
+      result.current.updateFilters({ quickPreset: 'Today', locations: ['1'] });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(1000); // well past the debounce window
+      await Promise.resolve();
+    });
+
+    // Static endpoint: filter churn must not re-hit it.
+    expect(callsTo('/pipeline/history/').length).toBe(1);
   });
 
   it('aborts the in-flight request when a newer fetch supersedes it', async () => {

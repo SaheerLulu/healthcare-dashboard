@@ -38,12 +38,26 @@ interface UseApiDataOptions {
 const DEBOUNCE_MS = 250;
 
 /**
+ * In-flight GET dedupe for `noFilters` consumers, keyed by endpoint+params.
+ * Several chrome components mount together and request the same static
+ * endpoint (TopBar + FilterSidebar + GlobalDateBar each need
+ * /executive/filter-options/) — they share ONE wire request instead of
+ * firing three. Entries are dropped as soon as the request settles, so a
+ * later refetch() always issues a fresh request.
+ */
+const inflightNoFilters = new Map<string, Promise<{ data: unknown }>>();
+
+/**
  * Generic hook to fetch data from a backend API endpoint.
  * Automatically includes global filter params + the current route's page
  * filters, and refetches (debounced) when they change. Stale responses are
  * discarded via request sequencing AND aborted via AbortController, so a
  * slider drag can never paint out-of-order data. Falls back to provided
  * `fallback` data on error so charts always render.
+ *
+ * `noFilters` consumers read filters via refs and never depend on them, so
+ * filter/page-filter changes don't refetch static endpoints; concurrent
+ * mounts of the same endpoint share one in-flight request (see above).
  */
 export function useApiData<T>(
   endpoint: string,
@@ -58,10 +72,16 @@ export function useApiData<T>(
   const abortRef = useRef<AbortController | null>(null);
   const seqRef = useRef(0);
 
+  // fetchData reads filters through refs; whether it *depends* on them is
+  // decided below so noFilters consumers keep a stable callback.
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+  const pageFiltersRef = useRef(pageFilters);
+  pageFiltersRef.current = pageFilters;
+
+  const paramsKey = JSON.stringify(options.params ?? null);
+
   const fetchData = useCallback(async () => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
     const seq = ++seqRef.current;
 
     setLoading(true);
@@ -70,14 +90,34 @@ export function useApiData<T>(
       const route = typeof window !== 'undefined' ? window.location.pathname : '';
       const params = {
         ...(options.noFilters ? {} : {
-          ...filtersToParams(filters),
-          ...pageFiltersToParams(pageFilters, route),
+          ...filtersToParams(filtersRef.current),
+          ...pageFiltersToParams(pageFiltersRef.current, route),
         }),
         ...options.params,
       };
-      const res = await api.get(endpoint, { params, signal: controller.signal });
+
+      let res: { data: unknown };
+      if (options.noFilters) {
+        // Shared request: no per-consumer abort signal — one consumer
+        // unmounting must not cancel the others. Staleness is still
+        // handled by the seq guard below.
+        const key = `${endpoint}|${paramsKey}`;
+        let pending = inflightNoFilters.get(key);
+        if (!pending) {
+          pending = api.get(endpoint, { params });
+          inflightNoFilters.set(key, pending);
+          const clear = () => inflightNoFilters.delete(key);
+          pending.then(clear, clear);
+        }
+        res = await pending;
+      } else {
+        abortRef.current?.abort();
+        const controller = new AbortController();
+        abortRef.current = controller;
+        res = await api.get(endpoint, { params, signal: controller.signal });
+      }
       if (mountedRef.current && seq === seqRef.current) {
-        setData(res.data);
+        setData(res.data as T);
       }
     } catch (err: any) {
       // Aborted requests are superseded, not failures.
@@ -92,7 +132,14 @@ export function useApiData<T>(
         setLoading(false);
       }
     }
-  }, [endpoint, filters, pageFilters, options.noFilters, JSON.stringify(options.params)]);
+  }, [
+    endpoint,
+    // Static endpoints must NOT refetch on filter/page-filter changes.
+    options.noFilters ? null : filters,
+    options.noFilters ? null : pageFilters,
+    options.noFilters,
+    paramsKey,
+  ]);
 
   const firstRunRef = useRef(true);
   useEffect(() => {

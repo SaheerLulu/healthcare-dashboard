@@ -16,6 +16,13 @@ from .helpers import parse_filters
 _COURIERS = ['BlueDart', 'Delhivery', 'India Speed Post', 'Local Courier', 'Ekart']
 _STATUSES = ['delivered', 'delivered', 'delivered', 'dispatched', 'in_transit', 'pending']
 
+# Synthetic-fallback bounds: this is DEMO-DATA synthesis (the register is
+# empty upstream), so cap the scan at the newest N B2B orders and cache the
+# synthesised list — previously every request to the 3 dispatch endpoints
+# re-scanned and re-synthesised the whole B2B order table.
+SYNTH_CAP = 2000
+SYNTH_CACHE_TTL = 300  # seconds
+
 
 def _synthesise_dispatch(b2b_qs):
     """Yield dispatch-shaped dicts from B2B orders. Deterministic per order id."""
@@ -60,6 +67,29 @@ def _synthesise_dispatch(b2b_qs):
         }
 
 
+def _synth_entries():
+    """Capped + cached synthetic dispatch list (demo-data synthesis).
+
+    Unfiltered on purpose: one cache entry serves every filter combination,
+    and the (cheap, in-memory) location filtering happens on the cached
+    list in _entries(). Cache key embeds the cap so changing SYNTH_CAP
+    never serves a stale shape; 300 s TTL bounds staleness after new B2B
+    orders land.
+    """
+    from django.core.cache import cache
+
+    cache_key = f'dispatch_synth:cap{SYNTH_CAP}'
+    entries = cache.get(cache_key)
+    if entries is None:
+        b2b_qs = (
+            B2BSalesOrderRO.objects.select_related('customer')
+            .order_by('-id')[:SYNTH_CAP]
+        )
+        entries = list(_synthesise_dispatch(b2b_qs))
+        cache.set(cache_key, entries, SYNTH_CACHE_TTL)
+    return entries
+
+
 def _entries(filters):
     """Return a list of dispatch entries (real + synth fallback).
 
@@ -86,12 +116,13 @@ def _entries(filters):
         # Synth fallback: dates are fabricated from B2B order dates, so we
         # deliberately do NOT date-filter here — a narrow window would make
         # the demo page look randomly empty.
-        b2b_qs = B2BSalesOrderRO.objects.select_related('customer').all()
+        entries = _synth_entries()
         if 'location_id' in filters:
-            b2b_qs = b2b_qs.filter(location_id=filters['location_id'])
+            entries = [e for e in entries if e['location_id'] == filters['location_id']]
         elif 'location_ids' in filters:
-            b2b_qs = b2b_qs.filter(location_id__in=filters['location_ids'])
-        return list(_synthesise_dispatch(b2b_qs))
+            wanted = set(filters['location_ids'])
+            entries = [e for e in entries if e['location_id'] in wanted]
+        return entries
     except (OperationalError, ProgrammingError):
         return []
 

@@ -16,6 +16,7 @@ bare ``manage.py test`` run resolves it to True. Suites that exercise the
 open-dashboard contract override it to False explicitly; auth behaviour
 itself is covered by JWTEnforcementTests.
 """
+from django.core.cache import cache
 from django.test import TestCase, Client, override_settings
 
 
@@ -80,6 +81,9 @@ class SmokeTests(TestCase):
 
     def setUp(self):
         self.c = Client()
+        # filter-options is server-cached keyed on the pipeline watermark;
+        # clear so no payload leaks across tests within one process.
+        cache.clear()
 
     def test_all_endpoints_return_2xx(self):
         failures = []
@@ -136,6 +140,54 @@ class SmokeTests(TestCase):
             if resp.status_code >= 500:
                 failures.append((path, resp.status_code, resp.content[:200]))
         self.assertEqual(failures, [], f"Filter contract broke on: {failures}")
+
+
+@override_settings(DASHBOARD_REQUIRE_AUTH=False)
+class FilterOptionsCacheTests(TestCase):
+    """The filter-options payload is server-cached (it costs ~25 DISTINCT
+    scans) keyed on the newest PipelineLog.last_run_at, so a pipeline sync
+    invalidates it without waiting out the TTL."""
+
+    PATH = "/api/executive/filter-options/"
+
+    def setUp(self):
+        self.c = Client()
+        cache.clear()
+
+    def test_second_request_serves_cached_payload(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        first = self.c.get(self.PATH)
+        self.assertEqual(first.status_code, 200)
+        with CaptureQueriesContext(connection) as ctx:
+            second = self.c.get(self.PATH)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json(), first.json())
+        # Cached hit: only the PipelineLog watermark probe, not the
+        # ~25 DISTINCT option scans.
+        self.assertLessEqual(len(ctx.captured_queries), 3)
+
+    def test_pipeline_run_invalidates_cache(self):
+        from datetime import date
+        from pipeline.models import PipelineLog
+        from reports.models import ReportSales
+
+        before = self.c.get(self.PATH).json()
+        self.assertNotIn("Tablets", before["categories"])
+
+        ReportSales.objects.create(
+            source_id=1, source_line_id=1, source_type="pos",
+            sale_date=date(2026, 6, 1), sale_month="2026-06",
+            fiscal_year="2026-27", location_id=1, channel="POS",
+            product_id=1, product_category="Tablets",
+        )
+        # Any sync writes PipelineLog (auto_now last_run_at), which moves
+        # the cache key — no stale options until the TTL runs out.
+        PipelineLog.objects.create(pipeline_type="pos_sales", last_synced_id=1)
+
+        after = self.c.get(self.PATH).json()
+        self.assertIn("Tablets", after["categories"])
 
 
 class JWTEnforcementTests(TestCase):
