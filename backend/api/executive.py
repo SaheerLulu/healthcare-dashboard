@@ -239,7 +239,27 @@ def filter_options(request):
     """Dynamic filter options + data date bounds, all derived from the report
     tables so the UI never offers a value that matches zero rows
     (docs/DRILLTHROUGH_DESIGN.md §5). HTTP-cached 5 min by middleware.
+
+    Server-side the computed payload is cached too: it costs ~25 DISTINCT
+    scans, and its inputs only change when a pipeline sync writes new rows.
+    The cache key embeds the newest PipelineLog.last_run_at, so any sync
+    (which always touches PipelineLog) naturally invalidates it; the 300 s
+    TTL is just a backstop. Tests control staleness with cache.clear().
     """
+    from django.core.cache import cache
+    from django.db.models import Max
+    from pipeline.models import PipelineLog
+
+    stamp = PipelineLog.objects.aggregate(m=Max('last_run_at'))['m']
+    cache_key = f'filter_options:{stamp.isoformat() if stamp else "no-sync"}'
+    payload = cache.get(cache_key)
+    if payload is None:
+        payload = _build_filter_options()
+        cache.set(cache_key, payload, 300)
+    return Response(payload)
+
+
+def _build_filter_options():
     from django.db.models import Min, Max
     from django.db.utils import OperationalError, ProgrammingError
     from reports.models import ReportSalesReturns, ReportTDS
@@ -269,7 +289,7 @@ def filter_options(request):
     los = [b['lo'] for b in (sales_b, purch_b, fin_b) if b['lo']]
     his = [b['hi'] for b in (sales_b, purch_b, fin_b) if b['hi']]
 
-    return Response({
+    return {
         'locations': [{'id': str(l['location_id']), 'name': l['location_name'] or f"Location {l['location_id']}"} for l in locations],
         'categories': _distinct(ReportSales, 'product_category'),
         'channels': _distinct(ReportSales, 'channel'),
@@ -299,4 +319,4 @@ def filter_options(request):
         'movement_statuses': _distinct(ReportInventory, 'movement_status'),
         'abc_classes': _distinct(ReportInventory, 'abc_class'),
         'ved_classes': _distinct(ReportInventory, 'product_ved_class'),
-    })
+    }
