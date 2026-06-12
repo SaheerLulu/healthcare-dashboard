@@ -5,11 +5,12 @@ Handles: POS sales, B2B sales, sales returns, purchases, purchase returns, inven
 import logging
 import time
 import traceback
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
 from django.db.models import Sum, Max, Min, F, Q
+from django.utils import timezone
 
 from source_models.models import (
     POSOrderRO, POSOrderLineRO,
@@ -34,6 +35,33 @@ def get_fiscal_year(d):
     if d.month >= 4:
         return f"{d.year}-{str(d.year + 1)[-2:]}"
     return f"{d.year - 1}-{str(d.year)[-2:]}"
+
+
+def local_date(value):
+    """Calendar date of a datetime in the project timezone (Asia/Kolkata).
+
+    With USE_TZ=True the ORM hands back aware UTC datetimes, and calling
+    ``.date()`` on those yields the *UTC* calendar day — every sale
+    between 00:00 and 05:29 IST landed on the previous day (or month/FY),
+    skewing all dated rollups. Convert to local time first. Naive
+    datetimes (e.g. an upstream SQLite read without tz info) are assumed
+    to already be wall-clock local and pass through, as do plain dates
+    and None.
+    """
+    if isinstance(value, datetime):
+        if timezone.is_aware(value):
+            value = timezone.localtime(value)
+        return value.date()
+    return value
+
+
+def local_hour(value, default=0):
+    """Hour-of-day in the project timezone; see local_date for rationale."""
+    if isinstance(value, datetime):
+        if timezone.is_aware(value):
+            value = timezone.localtime(value)
+        return value.hour
+    return default
 
 
 def safe_decimal(val, default=Decimal('0.00')):
@@ -268,13 +296,16 @@ class InventoryPipeline:
                 ).select_related('product')
 
                 sale_dt = order.sale_date
-                sale_d = sale_dt.date() if hasattr(sale_dt, 'date') else sale_dt
+                # local_date/local_hour convert aware UTC datetimes to IST
+                # before deriving calendar fields — .date()/.hour on the
+                # raw value put 00:00–05:29 IST sales on the previous day.
+                sale_d = local_date(sale_dt)
                 # Source POS orders default to midnight (hour=0) when the
                 # upstream UI doesn't capture a time, which made the hourly
                 # chart show a single midnight spike. POS doesn't operate at
                 # midnight — treat hour=0 as "unknown" and distribute across
                 # business hours 10–19 using a stable per-order hash.
-                raw_hour = sale_dt.hour if hasattr(sale_dt, 'hour') else 0
+                raw_hour = local_hour(sale_dt)
                 sale_hour = raw_hour if raw_hour else (10 + (hash(str(order.id)) % 10))
                 sale_month = sale_d.strftime('%Y-%m')
                 fy = get_fiscal_year(sale_d)
@@ -405,7 +436,9 @@ class InventoryPipeline:
                     sales_order_id=order.id
                 ).select_related('product')
 
-                sale_d = order.sale_date or order.created_at.date()
+                # B2B sale_date is a plain DateField; the created_at
+                # fallback is an aware datetime → derive the IST date.
+                sale_d = order.sale_date or local_date(order.created_at)
                 sale_month = sale_d.strftime('%Y-%m')
                 fy = get_fiscal_year(sale_d)
                 loc_name = _location_name(order.location)
@@ -510,7 +543,7 @@ class InventoryPipeline:
                 ).select_related('product')
 
                 ret_dt = ret.return_date
-                ret_d = ret_dt.date() if hasattr(ret_dt, 'date') else ret_dt
+                ret_d = local_date(ret_dt)  # IST calendar day, not UTC
                 ret_month = ret_d.strftime('%Y-%m')
                 fy = get_fiscal_year(ret_d)
                 loc_name = _location_name(ret.location)
@@ -736,7 +769,7 @@ class InventoryPipeline:
                 ).select_related('product')
 
                 ret_dt = ret.return_date
-                ret_d = ret_dt.date() if hasattr(ret_dt, 'date') else ret_dt
+                ret_d = local_date(ret_dt)  # IST calendar day, not UTC
                 ret_month = ret_d.strftime('%Y-%m')
                 fy = get_fiscal_year(ret_d)
                 loc_name = _location_name(ret.location)
