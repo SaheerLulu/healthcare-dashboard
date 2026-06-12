@@ -41,6 +41,28 @@ class DashboardPermission(BasePermission):
         return bool(IsAuthenticated().has_permission(request, view))
 
 
+class PipelineTriggerPermission(BasePermission):
+    """Destructive pipeline triggers need staff when auth is enforced.
+
+    ``POST /api/pipeline/trigger/`` — especially with ``{"full": true}``,
+    which wipes and rebuilds every report table — must not be available
+    to any holder of a bare JWT. When ``DASHBOARD_REQUIRE_AUTH`` is
+    effective, require ``is_staff`` or ``is_superuser`` on top of
+    authentication; when auth is off (dev/DEBUG) keep the open behaviour,
+    mirroring DashboardPermission.
+    """
+
+    message = "Staff or superuser privileges required to trigger pipeline runs."
+
+    def has_permission(self, request, view):
+        if not getattr(settings, "DASHBOARD_REQUIRE_AUTH", False):
+            return True
+        user = getattr(request, "user", None)
+        if user is None or not getattr(user, "is_authenticated", False):
+            return False
+        return bool(getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
+
+
 class HealthCheckPermission(BasePermission):
     """Always allow — for liveness probes that LBs / oncall hit unauthed."""
 

@@ -1,7 +1,7 @@
 """Pipeline trigger API endpoints."""
 import threading
 from rest_framework.decorators import api_view, permission_classes
-from .permissions import DashboardPermission
+from .permissions import DashboardPermission, PipelineTriggerPermission
 from rest_framework.response import Response
 from pipeline.inventory_pipeline import InventoryPipeline
 from pipeline.financial_pipeline import FinancialPipeline
@@ -56,9 +56,15 @@ def _run_pipeline_background(full=False):
 
 
 @api_view(['POST'])
-@permission_classes([DashboardPermission])
+@permission_classes([PipelineTriggerPermission])
 def trigger_pipeline(request):
-    """Trigger all pipelines. Runs in background thread."""
+    """Trigger all pipelines. Runs in background thread.
+
+    Tiered authorisation: any JWT is enough to *read* pipeline state
+    (progress/history/errors below), but triggering — which with
+    full=true wipes and rebuilds the report tables — requires
+    staff/superuser whenever DASHBOARD_REQUIRE_AUTH is effective.
+    """
     global _pipeline_running
 
     if _pipeline_running['active']:
