@@ -98,6 +98,25 @@ class SmokeTests(TestCase):
                 non_json.append((path, ct))
         self.assertEqual(non_json, [], f"Non-JSON: {non_json}")
 
+    def test_negative_or_garbage_limit_returns_200(self):
+        """Regression: ?limit=-1 used to flow into qs[:limit] and 500
+        (ValueError: negative indexing). Convention: bad numeric input
+        degrades to the clamped default, never errors."""
+        paths = [
+            "/api/executive/top-products/",      # parse_filters limit
+            "/api/inventory/days-of-cover/",     # direct limit + max_days
+            "/api/loyalty/rfm/",                 # list-slice limit
+            "/api/product/substitutability/",    # list-slice limit
+        ]
+        for path in paths:
+            for params in ({"limit": "-1"}, {"limit": "x"},
+                           {"limit": "-1", "max_days": "junk"}):
+                resp = self.c.get(path, params)
+                self.assertEqual(
+                    resp.status_code, 200,
+                    f"{path} with {params} -> {resp.status_code}",
+                )
+
     def test_filter_contract_is_accepted(self):
         """Every endpoint that takes filters must accept the standard set
         without raising 5xx. Empty result sets are fine."""

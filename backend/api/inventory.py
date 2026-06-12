@@ -8,7 +8,10 @@ from .permissions import DashboardPermission
 from rest_framework.response import Response
 
 from reports.models import ReportInventory, ReportSales, ReportPurchases
-from .helpers import parse_filters, apply_dim_filters, apply_ordering, paginate_detail
+from .helpers import (
+    parse_filters, apply_dim_filters, apply_ordering, paginate_detail,
+    parse_limit, safe_int,
+)
 
 
 def _fmt_inr(value):
@@ -1681,8 +1684,8 @@ def days_of_cover(request):
     """
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f)
-    max_days = int(request.query_params.get('max_days') or 365)
-    limit = int(request.query_params.get('limit') or 50)
+    max_days = safe_int(request.query_params.get('max_days'), 365, lo=1, hi=9999)
+    limit = parse_limit(request.query_params.get('limit'), 50)
 
     # Aggregate batches into one row per product+location. days_of_cover
     # for a multi-batch SKU is sum(qty)/avg(demand) — using the per-row

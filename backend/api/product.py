@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from reports.models import ReportSales, ReportInventory, ReportPurchases
 from .helpers import (
     parse_filters, apply_common_filters,
-    apply_dim_filters, apply_ordering, paginate_detail,
+    apply_dim_filters, apply_ordering, paginate_detail, parse_limit,
 )
 
 # Product page dimension → column (DRILLTHROUGH_DESIGN.md §1). Column names
@@ -239,7 +239,7 @@ def substitutability(request):
         'generic_revenue_share': round(generic_total / grand_total * 100.0, 2) if grand_total else 0.0,
         'top1_concentration_avg': round(top_share_sum / top_share_n, 2) if top_share_n else 0.0,
         'molecules_total': len(molecules),
-        'molecules': molecules[:int(request.query_params.get('limit') or 50)],
+        'molecules': molecules[:parse_limit(request.query_params.get('limit'), 50)],
     })
 
 

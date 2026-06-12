@@ -12,6 +12,38 @@ def prior_period_range(filters):
     return start - timedelta(days=days), start - timedelta(days=1)
 
 
+def safe_int(raw, fallback, lo=None, hi=None):
+    """Parse an int query param defensively.
+
+    Non-numeric input falls back to ``fallback``; the result is clamped
+    into ``[lo, hi]`` when bounds are given. Views slice querysets with
+    these values (``qs[:limit]``), and a user-supplied negative raises
+    ValueError → 500, so anything used as a slice bound MUST pass
+    through here with ``lo=1``. Convention: bad input never 4xx/5xxs —
+    it degrades to the default/clamped value (same philosophy as the
+    date handling in ``parse_filters``).
+    """
+    try:
+        value = int(raw) if raw is not None else fallback
+    except (ValueError, TypeError):
+        value = fallback
+    if lo is not None and value < lo:
+        value = lo
+    if hi is not None and value > hi:
+        value = hi
+    return value
+
+
+# Bounds for ?limit= style params: at least 1 row, at most 1000 so a
+# stray limit=999999 can't dump an entire fact table into one response.
+LIMIT_MIN, LIMIT_MAX = 1, 1000
+
+
+def parse_limit(raw, fallback):
+    """Shared parser for top-N ``?limit=`` params (clamped 1..1000)."""
+    return safe_int(raw, fallback, lo=LIMIT_MIN, hi=LIMIT_MAX)
+
+
 def growth_pct(current, previous):
     """Signed percent change, rounded to 1 decimal.
 
@@ -87,18 +119,12 @@ def parse_filters(request):
     if start_date > end_date:
         start_date, end_date = end_date, start_date
 
-    def _safe_int(raw, fallback):
-        try:
-            return int(raw) if raw is not None else fallback
-        except (ValueError, TypeError):
-            return fallback
-
     location_id = params.get('location_id')
     location_ids = params.get('location_ids', '')
     category = params.get('category', '')
     channel = params.get('channel', '')
     payment_method = params.get('payment_method', '')
-    limit = _safe_int(params.get('limit'), 10)
+    limit = parse_limit(params.get('limit'), 10)
 
     filters = {
         'start_date': start_date,

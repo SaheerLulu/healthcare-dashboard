@@ -19,7 +19,9 @@ from api.helpers import (
     apply_financial_filters,
     growth_pct,
     parse_filters,
+    parse_limit,
     prior_period_range,
+    safe_int,
 )
 
 
@@ -114,6 +116,39 @@ class ParseFiltersDateTests(TestCase):
     def test_invalid_limit_falls_back(self):
         f = parse_filters(_request_with({"limit": "lots"}))
         self.assertEqual(f["limit"], 10)
+
+    def test_negative_limit_clamped_to_one(self):
+        # qs[:limit] raises ValueError on negatives — the parse path must
+        # make user input incapable of producing a negative slice bound.
+        f = parse_filters(_request_with({"limit": "-1"}))
+        self.assertEqual(f["limit"], 1)
+
+    def test_huge_limit_clamped_to_max(self):
+        f = parse_filters(_request_with({"limit": "999999"}))
+        self.assertEqual(f["limit"], 1000)
+
+
+class SafeIntTests(TestCase):
+    """safe_int/parse_limit guard every user-supplied integer that ends up
+    as a queryset slice bound (negative slice → ValueError → 500)."""
+
+    def test_parses_valid_int(self):
+        self.assertEqual(safe_int("42", 10), 42)
+
+    def test_falls_back_on_garbage(self):
+        self.assertEqual(safe_int("x", 10), 10)
+        self.assertEqual(safe_int(None, 7), 7)
+
+    def test_clamps_low_and_high(self):
+        self.assertEqual(safe_int("-5", 10, lo=1, hi=100), 1)
+        self.assertEqual(safe_int("500", 10, lo=1, hi=100), 100)
+
+    def test_parse_limit_contract(self):
+        self.assertEqual(parse_limit("-1", 50), 1)
+        self.assertEqual(parse_limit("0", 50), 1)
+        self.assertEqual(parse_limit("999999", 50), 1000)
+        self.assertEqual(parse_limit("junk", 50), 50)
+        self.assertEqual(parse_limit(None, 50), 50)
 
 
 class ApplyCommonFiltersTests(TestCase):
