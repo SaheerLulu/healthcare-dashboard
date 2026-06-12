@@ -249,13 +249,21 @@ def anomalies(request):
                 })
 
     # 3. Returns share > 20 % ---------------------------------------------
+    # Trailing 24 months only — this fed an all-history scan of both fact
+    # tables on every request, and anomalies older than that aren't
+    # actionable. (The frontend just renders the feed; it has no window
+    # selector to honour.)
+    months_back = today.year * 12 + (today.month - 1) - 23
+    cutoff_month = f"{months_back // 12:04d}-{months_back % 12 + 1:02d}"
     sales_by_month = {
         r['sale_month']: float(r['rev'] or 0)
-        for r in ReportSales.objects.values('sale_month').annotate(rev=Sum('line_total'))
+        for r in ReportSales.objects.filter(sale_month__gte=cutoff_month)
+        .values('sale_month').annotate(rev=Sum('line_total'))
     }
     returns_by_month = {
         r['return_month']: float(r['ret'] or 0)
-        for r in ReportSalesReturns.objects.values('return_month').annotate(ret=Sum('line_total'))
+        for r in ReportSalesReturns.objects.filter(return_month__gte=cutoff_month)
+        .values('return_month').annotate(ret=Sum('line_total'))
     }
     for m, ret in returns_by_month.items():
         sales = sales_by_month.get(m, 0)

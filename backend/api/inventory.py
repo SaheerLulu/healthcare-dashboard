@@ -1281,8 +1281,12 @@ def batch_detail(request):
     overall_waste = sum(f_['wasteFromNonFIFO'] for f_ in fifo)
     overall_compliance = (sum(f_['compliant'] for f_ in fifo) / len(fifo)) if fifo else 100
 
-    # Lot profitability by supplier — use ReportPurchases to build scorecard
-    p_qs = ReportPurchases.objects.filter(is_return=False)
+    # Lot profitability by supplier — use ReportPurchases to build scorecard.
+    # Bounded by the request's filter window (was an all-history scan).
+    p_qs = ReportPurchases.objects.filter(
+        is_return=False,
+        bill_date__gte=f['start_date'], bill_date__lte=f['end_date'],
+    )
     if 'location_id' in f:
         p_qs = p_qs.filter(location_id=f['location_id'])
     elif 'location_ids' in f:
