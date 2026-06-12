@@ -2,10 +2,12 @@
 Cron-friendly dashboard ETL (DRILLTHROUGH_DESIGN §6).
 
 Runs the inventory pipeline then the financial pipeline incrementally.
-Holds an exclusive flock on a lock file so two cron firings 5 min apart
-won't stack: if a previous run is still in progress, this one exits with
-status 0 and a log line. Missed runs are simply absorbed by the next
-incremental window — the per-type PipelineLog watermarks make that safe.
+Holds the shared pipeline lock (Postgres advisory lock on deployed
+stacks, flock on SQLite — see pipeline.locking) so two cron firings
+5 min apart won't stack: if a previous run is still in progress, this
+one exits with status 0 and a log line. Missed runs are simply absorbed
+by the next incremental window — the per-type PipelineLog watermarks
+make that safe.
 
 Recommended cron:
     */15 * * * * cd /app/backend && .venv/bin/python manage.py scheduled_pipeline \\

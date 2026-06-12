@@ -24,6 +24,15 @@ services:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
       DJANGO_DEBUG: "False"
       DJANGO_DB_PATH: /data/db.sqlite3
+      # DEBUG is off → Django only serves hosts on this list. The frontend
+      # nginx forwards the browser's Host header, so add every name/IP the
+      # stack is browsed with (LAN IP etc.) via .env.
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      # /api/ is proxied same-origin by the frontend nginx; list external
+      # origins here only if another frontend calls this API directly.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      # Flip to 1 when a TLS proxy fronts this stack (Secure cookies).
+      DASHBOARD_HTTPS: ${DASHBOARD_HTTPS:-0}
       DASHBOARD_REQUIRE_AUTH: "1"
       DASHBOARD_PERF_LOG: "1"
       GUNICORN_WORKERS: "3"

@@ -1,23 +1,24 @@
 """Pipeline trigger API endpoints."""
 import threading
 from rest_framework.decorators import api_view, permission_classes
-from .permissions import DashboardPermission
+from .permissions import DashboardPermission, PipelineTriggerPermission
 from rest_framework.response import Response
 from pipeline.inventory_pipeline import InventoryPipeline
 from pipeline.financial_pipeline import FinancialPipeline
 from pipeline.locking import PipelineLocked, pipeline_lock
 from pipeline.models import PipelineLog, PipelineError
 
-# In-memory progress for THIS worker's UI polling. Cross-process mutual
-# exclusion (other gunicorn workers, cron's scheduled_pipeline, manual
-# management commands) comes from pipeline.locking's flock, acquired for
-# the duration of the background run.
+# In-memory progress for THIS worker's UI polling. Cross-process/-container
+# mutual exclusion (other gunicorn workers, the scheduler container's
+# run_all_pipelines loop, manual management commands) comes from
+# pipeline.locking's pipeline_lock — a Postgres advisory lock on deployed
+# stacks, flock on SQLite — held for the duration of the background run.
 _pipeline_lock = threading.Lock()
 _pipeline_running = {'active': False, 'progress': '', 'result': None}
 
 
 def _run_pipeline_background(full=False):
-    """Run all pipelines in a background thread, holding the shared flock."""
+    """Run all pipelines in a background thread, holding the shared lock."""
     global _pipeline_running
     try:
         with pipeline_lock():
@@ -55,9 +56,15 @@ def _run_pipeline_background(full=False):
 
 
 @api_view(['POST'])
-@permission_classes([DashboardPermission])
+@permission_classes([PipelineTriggerPermission])
 def trigger_pipeline(request):
-    """Trigger all pipelines. Runs in background thread."""
+    """Trigger all pipelines. Runs in background thread.
+
+    Tiered authorisation: any JWT is enough to *read* pipeline state
+    (progress/history/errors below), but triggering — which with
+    full=true wipes and rebuilds the report tables — requires
+    staff/superuser whenever DASHBOARD_REQUIRE_AUTH is effective.
+    """
     global _pipeline_running
 
     if _pipeline_running['active']:

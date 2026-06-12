@@ -8,7 +8,7 @@ from reports.models import ReportSales
 from .helpers import (
     parse_filters, apply_common_filters,
     apply_common_filters_range, prior_period_range, growth_pct,
-    apply_dim_filters, apply_ordering, paginate_detail,
+    apply_dim_filters, apply_ordering, paginate_detail, parse_limit,
 )
 
 # Loyalty page dimension → ReportSales column (DRILLTHROUGH_DESIGN.md §1).
@@ -266,7 +266,7 @@ def rfm(request):
             {'segment': s, 'count': segments_count.get(s, 0)}
             for s in seg_order
         ],
-        'customers': enriched[:int(request.query_params.get('limit') or 200)],
+        'customers': enriched[:parse_limit(request.query_params.get('limit'), 200)],
     })
 
 

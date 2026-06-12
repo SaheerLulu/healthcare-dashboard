@@ -12,6 +12,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -19,9 +20,16 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
-    """User login endpoint — returns JWT tokens."""
+    """User login endpoint — returns JWT tokens.
+
+    Scoped-throttled ('login', 10/min per client) so credentials can't
+    be brute-forced at line rate. Deliberately NO global anon throttle —
+    dashboards poll the read endpoints heavily.
+    """
 
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'login'
 
     def post(self, request):
         username = (request.data.get('username') or '').strip()
@@ -79,9 +87,16 @@ class LoginView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class RefreshTokenView(APIView):
-    """Exchange a refresh token for a new access token."""
+    """Exchange a refresh token for a new access token.
+
+    Scoped-throttled ('refresh', 60/min) — laxer than login because
+    legitimate clients refresh on every tab focus, but still bounded so
+    stolen refresh tokens can't be ground through the rotation endpoint.
+    """
 
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'refresh'
 
     def post(self, request):
         token = request.data.get('refresh_token') or request.data.get('refresh')

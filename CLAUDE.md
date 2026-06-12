@@ -7,7 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Backend (Django, port 8002)
 ```bash
 cd backend
-python3 manage.py runserver 8002          # Dev server
+# Settings fail closed: without DJANGO_SECRET_KEY, manage.py commands other
+# than `test` need DJANGO_DEBUG=True (start.sh exports it for you).
+DJANGO_DEBUG=True python3 manage.py runserver 8002  # Dev server
 python3 manage.py run_all_pipelines       # Incremental ETL sync
 python3 manage.py run_all_pipelines --full # Full refresh (deletes + rebuilds all report tables)
 python3 manage.py run_inventory_pipeline   # Sales, purchases, inventory only
@@ -57,7 +59,7 @@ Upstream SQLite (`../healthcare-inventory-management/backend/db.sqlite3`) → `s
 - **`reports/models.py`** — 7 denormalised wide reporting tables (`ReportSales`, `ReportSalesReturns`, `ReportPurchases`, `ReportInventory`, `ReportFinancial`, `ReportGST`, `ReportTDS`) plus `DashboardPref` (per-user prefs) and `AuditLog` (mutation audit trail). No FKs, no JOINs at query time.
 - **`pipeline/`** — ETL writing into `reports`. Two classes: `InventoryPipeline` (sales, purchases, inventory snapshots) and `FinancialPipeline` (journal entries, GST, TDS). Incremental via `PipelineLog.last_synced_id`, batch size 500.
 - **`api/`** — Function-based DRF views grouped by domain: `executive.py`, `sales.py`, `financial.py`, `inventory.py`, `procurement.py`, `compliance.py` (GST + TDS), `working_capital.py`, `location.py`, `product.py`, `dispatch.py`, `loyalty.py`, `audit.py`, `pipeline_api.py`, `health.py`, `prefs.py`, `reconcile.py`. All decorated `@api_view(...)` + `@permission_classes([DashboardPermission])`.
-- **`api/permissions.py`** — `DashboardPermission` defaults to AllowAny, switches to IsAuthenticated when `DASHBOARD_REQUIRE_AUTH=1`. Single env-var flips the entire surface.
+- **`api/permissions.py`** — `DashboardPermission` requires a JWT when `settings.DASHBOARD_REQUIRE_AUTH` is true. The setting fails closed: explicit `DASHBOARD_REQUIRE_AUTH` env wins, otherwise it defaults to `not DEBUG` (and `DEBUG` defaults to `False`), so bare prod-ish runs require auth. `PipelineTriggerPermission` additionally requires staff/superuser for `POST /api/pipeline/trigger/` when auth is on. Single env-var flips the entire surface.
 - **`api/middleware.py`** — Three middlewares wired in `settings.MIDDLEWARE`: `PerfTimingMiddleware` (logs `path · sql_count · sql_time · view_time` per request, warns when view_ms > 800), `CacheControlMiddleware` (5-min `Cache-Control` on `/api/executive/filter-options/`), `AuditMiddleware` (writes one `AuditLog` row per non-GET `/api/*` request).
 - **`api/helpers.py`** — `parse_filters(request)` extracts the standard filter contract (`start_date`, `end_date`, `location_ids`, `category`, `channel`, `payment_method`). `apply_common_filters(qs, filters)` and `apply_financial_filters(qs, filters)` apply them. Detail endpoints must call `.values(...)` on the queryset **before** `PageNumberPagination.paginate_queryset()` — DRF returns a list, not a queryset.
 - **`api/health.py`** — `GET /api/health/` (DB-reachable liveness, returns 503 on failure) and `GET /api/health/data/` (per-pipeline freshness with 15-min lag threshold).
@@ -97,10 +99,13 @@ Upstream SQLite (`../healthcare-inventory-management/backend/db.sqlite3`) → `s
 
 | Var | Default | Purpose |
 |---|---|---|
-| `DJANGO_SECRET_KEY` | dev fallback (warns) | JWT signing — must mirror upstream inventory app for SSO |
-| `DJANGO_DEBUG` | `True` | Disables in production |
+| `DJANGO_SECRET_KEY` | required unless DEBUG/tests (insecure dev fallback warns) | JWT signing — must mirror upstream inventory app for SSO; startup fails without it when `DJANGO_DEBUG` is off |
+| `DJANGO_DEBUG` | `False` | start.sh / backend/start.sh export `True` for local dev |
 | `DJANGO_DB_PATH` | `../healthcare-inventory-management/backend/db.sqlite3` | Path to the shared SQLite |
-| `DASHBOARD_REQUIRE_AUTH` | `False` | Flip to `1` to require JWT on every endpoint (closes risk R-09) |
+| `DASHBOARD_REQUIRE_AUTH` | unset → `not DEBUG` | JWT on every endpoint (closes risk R-09); explicit `0`/`1` overrides in both directions |
+| `DJANGO_ALLOWED_HOSTS` | `localhost,127.0.0.1` (non-DEBUG) | Comma list of served hostnames; DEBUG uses `*` |
+| `CORS_ALLOWED_ORIGINS` | empty (non-DEBUG) | Comma list of allowed cross-origin callers; DEBUG allows all |
+| `DASHBOARD_HTTPS` | `0` | Set `1` behind TLS so session/CSRF cookies are marked Secure |
 | `DASHBOARD_PERF_LOG` | off in non-DEBUG | Enables perf middleware logs in production |
 | `GUNICORN_WORKERS` | `3` | Used by the Docker entrypoint |
 
