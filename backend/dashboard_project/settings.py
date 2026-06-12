@@ -223,6 +223,13 @@ REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
     ],
+    # Rates for the ScopedRateThrottle on the auth views (api/auth.py).
+    # Scoped per-view on purpose: a global anon throttle would starve the
+    # dashboards, which poll the read endpoints heavily.
+    'DEFAULT_THROTTLE_RATES': {
+        'login': '10/min',
+        'refresh': '60/min',
+    },
 }
 
 # ---------------------------------------------------------------------------
