@@ -95,6 +95,12 @@ class ReportSales(models.Model):
         indexes = [
             models.Index(fields=['sale_month', 'location_id']),
             models.Index(fields=['source_type', 'source_id']),
+            # Universal filter shape: location equality + sale_date range
+            # (helpers.apply_common_filters) — lets the planner satisfy
+            # both predicates from one composite instead of intersecting
+            # the single-column indexes.
+            models.Index(fields=['location_id', 'sale_date'],
+                         name='rep_sales_loc_saledate'),
         ]
         constraints = [
             # One report row per source order line. Backstops the
@@ -240,6 +246,11 @@ class ReportPurchases(models.Model):
         db_table = 'report_purchases'
         indexes = [
             models.Index(fields=['purchase_month', 'location_id']),
+            # Every procurement/working-capital/inventory query filters
+            # is_return (equality, always present — location is opt-in)
+            # plus the bill_date window: equality + range = one composite.
+            models.Index(fields=['is_return', 'bill_date'],
+                         name='rep_purch_isret_bdate'),
         ]
         constraints = [
             # is_return disambiguates the two source tables sharing this
@@ -382,6 +393,10 @@ class ReportFinancial(models.Model):
         indexes = [
             models.Index(fields=['entry_month', 'account_type']),
             models.Index(fields=['party_type', 'party_id']),
+            # Universal filter shape: location equality + entry_date range
+            # (helpers.apply_financial_filters).
+            models.Index(fields=['location_id', 'entry_date'],
+                         name='rep_fin_loc_entrydate'),
         ]
         constraints = [
             # One report row per journal entry line.
