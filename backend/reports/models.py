@@ -96,6 +96,16 @@ class ReportSales(models.Model):
             models.Index(fields=['sale_month', 'location_id']),
             models.Index(fields=['source_type', 'source_id']),
         ]
+        constraints = [
+            # One report row per source order line. Backstops the
+            # pipeline lock: a second concurrent writer re-inserting the
+            # same incremental window now fails loudly instead of
+            # silently doubling revenue.
+            models.UniqueConstraint(
+                fields=['source_type', 'source_id', 'source_line_id'],
+                name='uniq_report_sales_source_line',
+            ),
+        ]
 
 
 class ReportSalesReturns(models.Model):
@@ -150,6 +160,13 @@ class ReportSalesReturns(models.Model):
 
     class Meta:
         db_table = 'report_sales_returns'
+        constraints = [
+            # Single source table (SalesReturn) → line id pair is unique.
+            models.UniqueConstraint(
+                fields=['source_id', 'source_line_id'],
+                name='uniq_report_sales_returns_source_line',
+            ),
+        ]
 
 
 class ReportPurchases(models.Model):
@@ -223,6 +240,14 @@ class ReportPurchases(models.Model):
         db_table = 'report_purchases'
         indexes = [
             models.Index(fields=['purchase_month', 'location_id']),
+        ]
+        constraints = [
+            # is_return disambiguates the two source tables sharing this
+            # fact table (PurchaseOrder vs PurchaseReturn id spaces).
+            models.UniqueConstraint(
+                fields=['is_return', 'source_id', 'source_line_id'],
+                name='uniq_report_purchases_source_line',
+            ),
         ]
 
 
@@ -300,6 +325,12 @@ class ReportInventory(models.Model):
             models.Index(fields=['snapshot_date', 'location_id']),
             models.Index(fields=['product_category', 'movement_status']),
         ]
+        # No source-tuple UniqueConstraint: this is a wholesale
+        # delete-and-rebuild snapshot that stores no source quant id, and
+        # (snapshot_date, product_id, location_id, batch_no) is not
+        # guaranteed unique upstream (multiple StockQuant rows can share
+        # product/location/lot). Concurrency is handled by the pipeline
+        # lock alone here.
 
 
 class ReportFinancial(models.Model):
@@ -351,6 +382,13 @@ class ReportFinancial(models.Model):
         indexes = [
             models.Index(fields=['entry_month', 'account_type']),
             models.Index(fields=['party_type', 'party_id']),
+        ]
+        constraints = [
+            # One report row per journal entry line.
+            models.UniqueConstraint(
+                fields=['source_entry_id', 'source_line_id'],
+                name='uniq_report_financial_source_line',
+            ),
         ]
 
 
@@ -412,6 +450,14 @@ class ReportGST(models.Model):
         indexes = [
             models.Index(fields=['period', 'source_table']),
         ]
+        constraints = [
+            # Each GST sync (gstr1/gstr3b/gstr2b/itc/rcm) writes exactly
+            # one row per source row; source_table scopes the id space.
+            models.UniqueConstraint(
+                fields=['source_table', 'source_id'],
+                name='uniq_report_gst_source',
+            ),
+        ]
 
 
 class ReportTDS(models.Model):
@@ -461,6 +507,13 @@ class ReportTDS(models.Model):
         indexes = [
             models.Index(fields=['transaction_month', 'section']),
         ]
+        # No source-tuple UniqueConstraint: source_id is an overloaded id
+        # space — synthesise_tds_from_purchases() reuses PURCHASE ids
+        # (source_type='purchase') while real rows use TDSDeduction ids
+        # with an upstream-controlled source_type that may also be
+        # 'purchase', so no tuple is guaranteed unique across the
+        # synthetic/real mix. Concurrency is handled by the pipeline
+        # lock alone here.
 
 
 class DashboardPref(models.Model):

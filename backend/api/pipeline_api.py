@@ -8,16 +8,17 @@ from pipeline.financial_pipeline import FinancialPipeline
 from pipeline.locking import PipelineLocked, pipeline_lock
 from pipeline.models import PipelineLog, PipelineError
 
-# In-memory progress for THIS worker's UI polling. Cross-process mutual
-# exclusion (other gunicorn workers, cron's scheduled_pipeline, manual
-# management commands) comes from pipeline.locking's flock, acquired for
-# the duration of the background run.
+# In-memory progress for THIS worker's UI polling. Cross-process/-container
+# mutual exclusion (other gunicorn workers, the scheduler container's
+# run_all_pipelines loop, manual management commands) comes from
+# pipeline.locking's pipeline_lock — a Postgres advisory lock on deployed
+# stacks, flock on SQLite — held for the duration of the background run.
 _pipeline_lock = threading.Lock()
 _pipeline_running = {'active': False, 'progress': '', 'result': None}
 
 
 def _run_pipeline_background(full=False):
-    """Run all pipelines in a background thread, holding the shared flock."""
+    """Run all pipelines in a background thread, holding the shared lock."""
     global _pipeline_running
     try:
         with pipeline_lock():
