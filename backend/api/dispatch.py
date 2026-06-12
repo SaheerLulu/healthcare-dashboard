@@ -3,7 +3,7 @@ Source DB has zero rows in `DispatchEntryRO`, so when that's empty we derive
 synthetic dispatch entries from `B2BSalesOrderRO` so the page is demo-able.
 The synthesised entries are deterministic (hashed on order id) so two calls
 with the same data return the same result."""
-from datetime import timedelta
+from datetime import date, timedelta
 from django.db.models import Count, Avg, Sum, Q
 from rest_framework.decorators import api_view, permission_classes
 from .permissions import DashboardPermission
@@ -96,6 +96,16 @@ def _entries(filters):
         return []
 
 
+def _dispatch_sort_key(row):
+    """Sort key for synthesised dispatch rows, tolerant of None dates.
+
+    The sentinel must be a *date* (date.min), not '' — B2B orders without
+    a sale_date yield dispatch_date=None, and mixing str with date in one
+    sort raises TypeError → 500 on /api/dispatch/detail/.
+    """
+    return row['dispatch_date'] or date.min
+
+
 def _apply_entry_dims(entries, filters):
     """Apply `status` / `courier_partner` dimension filters.
 
@@ -185,7 +195,7 @@ def detail(request):
     entries = _apply_entry_dims(_entries(f), f)
 
     if isinstance(entries, list):  # synth fallback
-        rows = sorted(entries, key=lambda r: r['dispatch_date'] or '', reverse=True)[:50]
+        rows = sorted(entries, key=_dispatch_sort_key, reverse=True)[:50]
         return Response([
             {k: r[k] for k in (
                 'invoice_no', 'customer_name', 'city', 'state',
