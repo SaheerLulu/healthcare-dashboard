@@ -1682,6 +1682,9 @@ def days_of_cover(request):
         response stays focused on actionable items.
       - location_id / location_ids — standard filter contract.
     """
+    from django.db.models import Case, FloatField, Value, When
+    from django.db.models.functions import Cast, Round
+
     f = parse_filters(request)
     qs = _apply_inventory_filters(_latest_snapshot(), f)
     max_days = safe_int(request.query_params.get('max_days'), 365, lo=1, hi=9999)
@@ -1690,7 +1693,10 @@ def days_of_cover(request):
     # Aggregate batches into one row per product+location. days_of_cover
     # for a multi-batch SKU is sum(qty)/avg(demand) — using the per-row
     # min would underestimate when one batch is small but others cover.
-    rows = list(
+    # The cover computation, threshold filter, ordering and limit all run
+    # in the database so only the page actually returned is materialised
+    # (this previously pulled every SKU into Python).
+    grouped = (
         qs.values('product_id', 'product_name', 'product_category', 'location_name')
         .annotate(
             qty_on_hand=Sum('qty_on_hand'),
@@ -1698,27 +1704,36 @@ def days_of_cover(request):
             stock_value_cost=Sum('stock_value_cost'),
         )
         .filter(qty_on_hand__gt=0)
+        .annotate(
+            days_of_cover=Case(
+                # Never-moving SKUs sentinel; matches days_of_stock convention.
+                When(avg_daily_demand__lte=0, then=Value(9999.0)),
+                When(avg_daily_demand__isnull=True, then=Value(9999.0)),
+                default=Round(
+                    Cast(F('qty_on_hand'), FloatField())
+                    / Cast(F('avg_daily_demand'), FloatField()),
+                    precision=1,
+                ),
+                output_field=FloatField(),
+            ),
+        )
+        .filter(days_of_cover__lte=max_days)
     )
+
+    total = grouped.count()
+    rows = list(grouped.order_by('days_of_cover', '-stock_value_cost')[:limit])
 
     out = []
     for r in rows:
-        demand = float(r['avg_daily_demand'] or 0)
-        qty = int(r['qty_on_hand'] or 0)
-        if demand <= 0:
-            doc = 9999  # never-moving SKUs sentinel; matches days_of_stock convention
-        else:
-            doc = round(qty / demand, 1)
-        if doc > max_days:
-            continue
+        doc = float(r['days_of_cover'])
         out.append({
             **r,
-            'avg_daily_demand': float(demand),
+            'avg_daily_demand': float(r['avg_daily_demand'] or 0),
             'days_of_cover': doc,
             'urgency': 'critical' if doc <= 7 else 'low' if doc <= 30 else 'ok',
         })
 
-    out.sort(key=lambda x: (x['days_of_cover'], -float(x.get('stock_value_cost') or 0)))
-    return Response({'count': len(out), 'results': out[:limit]})
+    return Response({'count': total, 'results': out})
 
 
 @api_view(['GET'])
