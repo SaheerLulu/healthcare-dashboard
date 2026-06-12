@@ -4,26 +4,57 @@ Shares the same SQLite database and SECRET_KEY as healthcare-inventory-managemen
 and accounting apps for SSO via JWT.
 """
 import os
+import sys
 from pathlib import Path
 from datetime import timedelta
 
+from django.core.exceptions import ImproperlyConfigured
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# DEBUG defaults OFF so a bare production-ish run fails closed (auth
+# required, restricted hosts, no wildcard CORS, real SECRET_KEY needed).
+# Local dev entrypoints (start.sh, backend/start.sh) export
+# DJANGO_DEBUG=True explicitly — dev convenience lives there, not here.
+DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('true', '1', 'yes')
+
+# `manage.py test` must run with zero env configured (CI, fresh checkout),
+# so test runs are allowed the same insecure fallbacks as DEBUG.
+TESTING = 'test' in sys.argv
 
 # ---------------------------------------------------------------------------
 # Security – same key as inventory & accounting for JWT SSO
 # ---------------------------------------------------------------------------
 _SECRET_KEY_ENV = os.environ.get('DJANGO_SECRET_KEY')
-if not _SECRET_KEY_ENV:
+if _SECRET_KEY_ENV:
+    SECRET_KEY = _SECRET_KEY_ENV
+elif DEBUG or TESTING:
     import warnings
     warnings.warn(
-        "DJANGO_SECRET_KEY not set. Using insecure fallback – dev only.",
+        "DJANGO_SECRET_KEY not set. Using an insecure dev-only fallback. "
+        "JWT SSO with the pharmacy/accounting apps will NOT work — they "
+        "sign tokens with the shared DJANGO_SECRET_KEY.",
         stacklevel=2,
     )
-SECRET_KEY = _SECRET_KEY_ENV or 'django-insecure--3fejku$$i93u7o15lm79*vl1tve0*tsl8em6hx1x8y4@=k4hr'
+    SECRET_KEY = 'django-insecure-dashboard-dev-fallback-do-not-deploy'
+else:
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY must be set when DJANGO_DEBUG is off. Use the "
+        "key shared with the pharmacy/accounting apps so JWT SSO keeps "
+        "working."
+    )
 
-DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('true', '1', 'yes')
-
-ALLOWED_HOSTS = ['*']
+# Wildcard hosts only in DEBUG; otherwise an explicit comma-separated list
+# via DJANGO_ALLOWED_HOSTS (deploys must include their public hostname —
+# the frontend nginx forwards the original Host header).
+if DEBUG:
+    ALLOWED_HOSTS = ['*']
+else:
+    ALLOWED_HOSTS = [
+        h.strip()
+        for h in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+        if h.strip()
+    ]
 
 # ---------------------------------------------------------------------------
 # Application definition
@@ -137,20 +168,45 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # ---------------------------------------------------------------------------
 # CORS
 # ---------------------------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = True
+# Wildcard CORS only in DEBUG (vite dev server etc.). In production the
+# frontend nginx proxies /api/ same-origin, so the default is "no
+# cross-origin callers"; add any external origins explicitly via the
+# comma-separated CORS_ALLOWED_ORIGINS env var.
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    CORS_ALLOWED_ORIGINS = [
+        o.strip()
+        for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
+        if o.strip()
+    ]
+
+# ---------------------------------------------------------------------------
+# Security headers / cookies (non-DEBUG hardening)
+# ---------------------------------------------------------------------------
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+# Secure cookie flags are gated on DASHBOARD_HTTPS=1 instead of DEBUG so
+# plain-HTTP LAN deploys keep a working admin login. Set it wherever TLS
+# terminates in front of the app (e.g. the dev.dashboards nginx).
+# SECURE_SSL_REDIRECT is deliberately not set — TLS terminates at nginx.
+DASHBOARD_HTTPS = os.environ.get('DASHBOARD_HTTPS', '').lower() in ('true', '1', 'yes')
+SESSION_COOKIE_SECURE = DASHBOARD_HTTPS
+CSRF_COOKIE_SECURE = DASHBOARD_HTTPS
 
 # ---------------------------------------------------------------------------
 # REST Framework
 # ---------------------------------------------------------------------------
-# Dashboard auth gate — when False (default), every endpoint behaves like
-# AllowAny; when True, ``DashboardPermission`` requires a valid JWT. The
-# DASH-E00-A04 NFR mandates True before GA. Toggle via env var so local
-# dev stays open without local config edits.
-DASHBOARD_REQUIRE_AUTH = os.environ.get('DASHBOARD_REQUIRE_AUTH', '').lower() in (
-    'true',
-    '1',
-    'yes',
-)
+# Dashboard auth gate — when False, every endpoint behaves like AllowAny;
+# when True, ``DashboardPermission`` requires a valid JWT (DASH-E00-A04).
+# Fail-closed default: when the env var is unset, auth is required unless
+# DEBUG is on. Both directions can still be forced explicitly
+# (DASHBOARD_REQUIRE_AUTH=1 in DEBUG, =0 in production).
+_REQUIRE_AUTH_ENV = os.environ.get('DASHBOARD_REQUIRE_AUTH', '').strip()
+if _REQUIRE_AUTH_ENV:
+    DASHBOARD_REQUIRE_AUTH = _REQUIRE_AUTH_ENV.lower() in ('true', '1', 'yes')
+else:
+    DASHBOARD_REQUIRE_AUTH = not DEBUG
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [

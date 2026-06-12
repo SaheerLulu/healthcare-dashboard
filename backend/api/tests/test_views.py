@@ -10,8 +10,13 @@ These are *contract* tests, not data-correctness tests:
 
 If a future refactor breaks the response envelope, these tests catch it
 before it reaches a frontend chart that crashes with "data is undefined".
+
+DASHBOARD_REQUIRE_AUTH now fails closed (defaults to ``not DEBUG``), so a
+bare ``manage.py test`` run resolves it to True. Suites that exercise the
+open-dashboard contract override it to False explicitly; auth behaviour
+itself is covered by JWTEnforcementTests.
 """
-from django.test import TestCase, Client
+from django.test import TestCase, Client, override_settings
 
 
 SMOKE_ENDPOINTS = [
@@ -69,6 +74,7 @@ SMOKE_ENDPOINTS = [
 ]
 
 
+@override_settings(DASHBOARD_REQUIRE_AUTH=False)
 class SmokeTests(TestCase):
     """Hit every public endpoint once. None should 5xx on an empty DB."""
 
@@ -122,28 +128,32 @@ class JWTEnforcementTests(TestCase):
     def setUp(self):
         self.c = Client()
 
-    def test_dev_default_allows_anon(self):
-        from django.conf import settings
-        settings.DASHBOARD_REQUIRE_AUTH = False  # default
-        resp = self.c.get("/api/executive/kpis/")
+    def test_flag_off_allows_anon(self):
+        with override_settings(DASHBOARD_REQUIRE_AUTH=False):
+            resp = self.c.get("/api/executive/kpis/")
         self.assertEqual(resp.status_code, 200)
 
     def test_flag_on_blocks_anon(self):
-        from django.conf import settings
-        settings.DASHBOARD_REQUIRE_AUTH = True
-        try:
+        with override_settings(DASHBOARD_REQUIRE_AUTH=True):
             resp = self.c.get("/api/executive/kpis/")
-            self.assertIn(resp.status_code, (401, 403))
-        finally:
-            settings.DASHBOARD_REQUIRE_AUTH = False
+        self.assertIn(resp.status_code, (401, 403))
+
+    def test_fail_closed_default_blocks_anon(self):
+        """With no env configured (DEBUG off, DASHBOARD_REQUIRE_AUTH
+        unset), settings resolve the flag to True — the bare test run
+        itself is the production-ish case, so no override here."""
+        import os
+        if os.environ.get("DASHBOARD_REQUIRE_AUTH", "").strip() or \
+                os.environ.get("DJANGO_DEBUG", "").lower() in ("true", "1", "yes"):
+            self.skipTest("ambient env overrides the fail-closed default")
+        from django.conf import settings
+        self.assertTrue(settings.DASHBOARD_REQUIRE_AUTH)
+        resp = self.c.get("/api/executive/kpis/")
+        self.assertIn(resp.status_code, (401, 403))
 
     def test_flag_on_still_allows_health(self):
         """Liveness must stay open even with auth required —
         the LB needs to probe without a token (DASH-E00-A05)."""
-        from django.conf import settings
-        settings.DASHBOARD_REQUIRE_AUTH = True
-        try:
+        with override_settings(DASHBOARD_REQUIRE_AUTH=True):
             resp = self.c.get("/api/health/")
-            self.assertEqual(resp.status_code, 200)
-        finally:
-            settings.DASHBOARD_REQUIRE_AUTH = False
+        self.assertEqual(resp.status_code, 200)
