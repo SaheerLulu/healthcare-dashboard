@@ -258,14 +258,6 @@ export const FinancialDeepDive = () => {
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Financial Deep Dive</h1>
-        <div className="flex gap-2 flex-shrink-0">
-          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap">
-            Export P&L
-          </button>
-          <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 whitespace-nowrap">
-            Generate Report
-          </button>
-        </div>
       </div>
 
       {/* KPI Cards */}

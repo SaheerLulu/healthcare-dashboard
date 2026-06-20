@@ -166,14 +166,6 @@ export const TDSTracker = () => {
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">TDS Tracker</h1>
-        <div className="flex gap-2 flex-shrink-0">
-          <button className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap">
-            Download Form 26Q
-          </button>
-          <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 whitespace-nowrap">
-            Pay TDS
-          </button>
-        </div>
       </div>
 
       <div className="grid grid-cols-5 gap-4 mb-6">
@@ -489,9 +481,6 @@ export const WorkingCapital = () => {
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Working Capital</h1>
-        <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 whitespace-nowrap">
-          Export Report
-        </button>
       </div>
 
       <div className="grid grid-cols-5 gap-4 mb-6">
@@ -717,9 +706,6 @@ export const LocationBenchmarking = () => {
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Location Benchmarking</h1>
-        <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 whitespace-nowrap">
-          Compare Locations
-        </button>
       </div>
 
       <div className="grid grid-cols-5 gap-4 mb-6">
@@ -912,9 +898,6 @@ export const ProductIntelligence = () => {
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Product Intelligence</h1>
-        <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 whitespace-nowrap">
-          Product Analysis
-        </button>
       </div>
 
       <div className="grid grid-cols-5 gap-4 mb-6">
@@ -1154,9 +1137,6 @@ export const DispatchFulfillment = () => {
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Dispatch & Fulfillment</h1>
-        <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 whitespace-nowrap">
-          Create Shipment
-        </button>
       </div>
 
       <div className="grid grid-cols-5 gap-4 mb-6">
@@ -1362,9 +1342,6 @@ export const LoyaltyAnalytics = () => {
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Loyalty Analytics</h1>
-        <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 whitespace-nowrap">
-          Member Report
-        </button>
       </div>
 
       <div className="grid grid-cols-5 gap-4 mb-6">
@@ -1590,9 +1567,6 @@ export const AuditDataHealth = () => {
     <div>
       <div className="flex items-center justify-between mb-6 gap-4">
         <h1 className="text-2xl font-bold text-gray-900">Audit & Data Health</h1>
-        <button className="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 whitespace-nowrap">
-          Run Audit
-        </button>
       </div>
 
       <div className="grid grid-cols-5 gap-4 mb-6">
