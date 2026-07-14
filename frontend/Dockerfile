@@ -3,9 +3,8 @@
 # Multi-stage: vite build in node, then static serve via nginx with a
 # proxy_pass for /api/ that points at the backend container.
 #
-# Build context is the REPO ROOT (not frontend/): some committed pages
-# still import the legacy mock-data module at <root>/src/app/data, so
-# the build needs both frontend/ and src/ present.
+# Build context is the REPO ROOT (not frontend/) so the root .dockerignore
+# (which excludes node_modules/dist) applies to the build.
 #   docker build -f frontend/Dockerfile .
 FROM node:20-alpine AS builder
 
@@ -16,9 +15,6 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY frontend/ ./
-# Legacy root-level data module still referenced from
-# frontend/src/app/pages via ../../../../src/app/data.
-COPY src/ /app/src/
 RUN npm run build
 
 # ---------- Runtime stage ----------

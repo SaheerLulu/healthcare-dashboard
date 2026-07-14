@@ -193,7 +193,7 @@ export const TopBar = () => {
             alignItems: 'baseline',
           }}
         >
-          seef<span style={{ color: 'var(--brand)' }}>med</span>
+          biloop<span style={{ color: 'var(--brand)' }}>ai</span>
           <span style={{ color: 'var(--brand)' }}>.</span>
         </span>
       </div>

@@ -26,7 +26,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: ${{ secrets.EC2_SSH_PORT || 22 }}
-          source: "backend,frontend,deploy,src,.dockerignore"
+          source: "backend,frontend,deploy,.dockerignore"
           target: "/opt/dashboard/repo"
           rm: true
           overwrite: true

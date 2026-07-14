@@ -21,7 +21,7 @@ services:
       dockerfile: Dockerfile
     image: seefmed/healthcare-dashboard-backend:latest
     environment:
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
+      DJANGO_SECRET_KEY: "dafsdfds"
       DJANGO_DEBUG: "False"
       DJANGO_DB_PATH: /data/db.sqlite3
       # DEBUG is off → Django only serves hosts on this list. The frontend
@@ -71,8 +71,7 @@ services:
 
   frontend:
     build:
-      # Repo root: the build needs frontend/ plus the legacy src/app/data
-      # module still imported by some pages (see frontend/Dockerfile).
+      # Repo root context so the root .dockerignore applies (see frontend/Dockerfile).
       context: .
       dockerfile: frontend/Dockerfile
     image: seefmed/healthcare-dashboard-frontend:latest

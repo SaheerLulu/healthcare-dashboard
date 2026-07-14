@@ -74,6 +74,24 @@ def safe_decimal(val, default=Decimal('0.00')):
     return Decimal(str(val))
 
 
+# Percentages computed from a ratio (margin/MRP, margin/line-total) can blow up
+# when the denominator is tiny relative to the numerator — e.g. a purchase_rate
+# far above MRP, or a near-zero line_total. The destination columns are
+# DecimalField(5,2), so anything with |value| >= 1000 raises "numeric field
+# overflow" and kills the whole pipeline run. These are garbage percentages from
+# dirty source data anyway (cf. growth_pct's ±500% clamp in api/helpers.py), so
+# clamp them to the column domain instead of crashing.
+_PCT_MAX = Decimal('999.99')
+
+
+def clamp_pct(val):
+    if val > _PCT_MAX:
+        return _PCT_MAX
+    if val < -_PCT_MAX:
+        return -_PCT_MAX
+    return val
+
+
 _CATEGORY_PATTERNS = (
     # (substring, category) — case-insensitive, first match wins
     ('TABLET', 'Tablets'), (' TAB ', 'Tablets'), (' TAB-', 'Tablets'), ('CAPSULE', 'Capsules'),
@@ -365,7 +383,7 @@ class InventoryPipeline:
                     taxable = safe_decimal(line.line_total) / (1 + tax_pct / 100) if tax_pct else safe_decimal(line.line_total)
                     cost = safe_decimal(line.unit_price) * Decimal('0.7')  # Estimate if no purchase_rate available
                     gross_margin = safe_decimal(line.line_total) - cost * line.quantity
-                    margin_pct = (gross_margin / safe_decimal(line.line_total) * 100).quantize(Decimal('0.01'), ROUND_HALF_UP) if line.line_total else Decimal('0')
+                    margin_pct = clamp_pct((gross_margin / safe_decimal(line.line_total) * 100).quantize(Decimal('0.01'), ROUND_HALF_UP)) if line.line_total else Decimal('0')
 
                     # Calculate split GST for POS (intra-state assumed)
                     half_tax = (safe_decimal(line.line_total) - taxable) / 2 if tax_pct else Decimal('0')
@@ -489,7 +507,7 @@ class InventoryPipeline:
                     taxable = safe_decimal(line.line_total) - safe_decimal(line.cgst_amount) - safe_decimal(line.sgst_amount) - safe_decimal(line.igst_amount)
                     cost = safe_decimal(line.unit_price) * Decimal('0.7')
                     gross_margin = safe_decimal(line.line_total) - cost * line.quantity
-                    margin_pct = (gross_margin / safe_decimal(line.line_total) * 100).quantize(Decimal('0.01'), ROUND_HALF_UP) if line.line_total else Decimal('0')
+                    margin_pct = clamp_pct((gross_margin / safe_decimal(line.line_total) * 100).quantize(Decimal('0.01'), ROUND_HALF_UP)) if line.line_total else Decimal('0')
 
                     batch.append(ReportSales(
                         source_id=order.id,
@@ -696,7 +714,7 @@ class InventoryPipeline:
                     prod = _product_fields(line.product)
                     rate = safe_decimal(line.purchase_rate)
                     mrp = safe_decimal(line.mrp)
-                    margin_mrp = ((mrp - rate) / mrp * 100).quantize(Decimal('0.01'), ROUND_HALF_UP) if mrp else Decimal('0')
+                    margin_mrp = clamp_pct(((mrp - rate) / mrp * 100).quantize(Decimal('0.01'), ROUND_HALF_UP)) if mrp else Decimal('0')
 
                     # Calculate line total: qty * rate * (1 - disc%) + tax
                     base = rate * line.quantity

@@ -21,6 +21,13 @@ export default defineConfig({
   assetsInclude: ['**/*.svg', '**/*.csv'],
 
   server: {
+    // Bind 0.0.0.0 (not just localhost) so the dev server is reachable from
+    // other machines / the internet, and accept any Host header — Vite 6
+    // otherwise rejects requests whose host isn't localhost/an IP (DNS-
+    // rebind protection), which would 403 access via a public domain.
+    // Dev-only convenience; do not ship this to a real deployment.
+    host: true,
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: 'http://localhost:8002',

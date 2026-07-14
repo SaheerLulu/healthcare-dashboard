@@ -31,8 +31,6 @@ npm run test:watch                         # Vitest watch mode
 npx vitest run path/to/file.test.tsx       # Single test file
 ```
 
-Build from repo root: `npx vite build` (runs from frontend context via workspace).
-
 ### Tooling scripts
 ```bash
 OP_API_KEY=<token> python3 scripts/build_rtm.py   # Regenerate docs/RTM.{csv,md}
