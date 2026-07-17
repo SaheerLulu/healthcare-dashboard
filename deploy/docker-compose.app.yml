@@ -1,48 +1,50 @@
 # ============================================================
-# DEV environment – docker-compose
-# Domain: dev.dashboards.seefmed.com
-# Run:  docker compose -p dashboard-dev -f deploy/docker-compose.dev.yml --env-file /opt/dashboard/dev/.env up -d --build
+# Parameterized stack — one compose file for every environment.
 #
-# The dashboard reads its source data from the pharmacy DEV
-# database (PostgreSQL `healthcare_dev` on the host) and creates
-# its own reporting tables in the same database — mirroring the
-# local shared-SQLite design.
+# Images are built by GitHub Actions and pulled from GHCR;
+# BACKEND_IMAGE / FRONTEND_IMAGE are exported by
+# deploy/scripts/remote-deploy.sh. Everything else comes from
+# the environment's .env file (see deploy/envs/*.example):
+#
+#   docker compose -p dashboard-<env> -f deploy/docker-compose.app.yml \
+#     --env-file /opt/dashboard/<env>/.env up -d
+#
+# The dashboard reads its source data from the pharmacy database
+# of the SAME environment (host PostgreSQL) and creates its own
+# reporting tables in that database. remote-deploy.sh derives
+# DJANGO_SECRET_KEY / POSTGRES_* from the pharmacy env file so
+# JWT SSO and DB access stay in sync with the upstream app.
 # ============================================================
 
 x-backend-base: &backend-base
-  build:
-    context: ../backend
-    dockerfile: Dockerfile
+  image: ${BACKEND_IMAGE:?exported by remote-deploy.sh}
   environment: &backend-env
     DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY must be set}
     DJANGO_DEBUG: "False"
     DJANGO_DB_ENGINE: postgresql
     POSTGRES_HOST: ${POSTGRES_HOST:-host.docker.internal}
     POSTGRES_PORT: ${POSTGRES_PORT:-5432}
-    POSTGRES_DB: ${POSTGRES_DB:-healthcare_dev}
+    POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
     POSTGRES_USER: ${POSTGRES_USER:-healthcare}
     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     # DEBUG is off → Django only serves hosts on this list; the public
     # domain must be present (nginx forwards the original Host header).
-    DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-dev.dashboards.seefmed.com,localhost,127.0.0.1}
+    DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
     # Same-origin via the frontend nginx — no cross-origin callers by default.
     CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     # TLS terminates at the host nginx → mark session/CSRF cookies Secure.
     DASHBOARD_HTTPS: ${DASHBOARD_HTTPS:-1}
     DASHBOARD_REQUIRE_AUTH: ${DASHBOARD_REQUIRE_AUTH:-1}
-    DASHBOARD_PERF_LOG: "1"
+    DASHBOARD_PERF_LOG: ${DASHBOARD_PERF_LOG:-1}
     GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
   extra_hosts:
     - "host.docker.internal:host-gateway"
-  networks:
-    - dashboard-dev
   restart: unless-stopped
 
 services:
-  # ---- Django backend (dev) ----
+  # ---- Django backend ----
   backend:
     <<: *backend-base
-    container_name: dashboard-dev-backend
     expose:
       - "8002"
 
@@ -53,7 +55,6 @@ services:
   # constraint on pipeline_type) and corrupt the log table.
   scheduler:
     <<: *backend-base
-    container_name: dashboard-dev-scheduler
     depends_on:
       backend:
         condition: service_healthy
@@ -66,21 +67,11 @@ services:
     healthcheck:
       disable: true
 
-  # ---- React frontend (nginx serving vite build) ----
+  # ---- React frontend (nginx serving the vite build, proxies /api) ----
   frontend:
-    build:
-      # Repo root context so the root .dockerignore applies (see frontend/Dockerfile).
-      context: ..
-      dockerfile: frontend/Dockerfile
-    container_name: dashboard-dev-frontend
-    ports:
-      - "${DEV_FRONTEND_PORT:-3005}:80"
+    image: ${FRONTEND_IMAGE:?exported by remote-deploy.sh}
     depends_on:
       - backend
-    networks:
-      - dashboard-dev
+    ports:
+      - "${FRONTEND_PORT:?set in the environment .env file}:80"
     restart: unless-stopped
-
-networks:
-  dashboard-dev:
-    driver: bridge

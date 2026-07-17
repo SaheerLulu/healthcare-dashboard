@@ -1,49 +1,42 @@
 # -------------------------------------------------------
-# Nginx reverse-proxy – DEV environment
-# dev.dashboards.seefmed.com  →  dashboard-dev-frontend:80
-# -------------------------------------------------------
-# Place in /etc/nginx/sites-available/devdashboards.conf
-# sudo ln -s /etc/nginx/sites-available/devdashboards.conf /etc/nginx/sites-enabled/
-# sudo nginx -t && sudo systemctl reload nginx
+# Host-nginx vhost (HTTPS) — rendered by remote-deploy.sh
+# via: envsubst '${DOMAIN} ${FRONTEND_PORT}'
+# Installed as /etc/nginx/sites-available/${DOMAIN}.conf
 # -------------------------------------------------------
 
 server {
     listen 80;
-    server_name dev.dashboards.seefmed.com;
-
-    # Redirect HTTP → HTTPS (after certbot sets up the cert)
-    location / {
-        return 301 https://$host$request_uri;
-    }
+    server_name ${DOMAIN};
 
     # Let's Encrypt challenge
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
 }
 
 server {
     listen 443 ssl http2;
-    server_name dev.dashboards.seefmed.com;
+    server_name ${DOMAIN};
 
-    # SSL certs managed by Certbot
-    ssl_certificate     /etc/letsencrypt/live/dev.dashboards.seefmed.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/dev.dashboards.seefmed.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
 
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
 
-    # Security headers
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
 
     client_max_body_size 100M;
 
-    # Proxy to dev frontend container on port 3005
     location / {
-        proxy_pass http://127.0.0.1:3005;
+        proxy_pass http://127.0.0.1:${FRONTEND_PORT};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -56,7 +49,6 @@ server {
         proxy_read_timeout 900s;
     }
 
-    # Gzip
     gzip on;
     gzip_vary on;
     gzip_min_length 1024;
